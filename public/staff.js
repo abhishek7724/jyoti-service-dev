@@ -64,7 +64,9 @@ function showLogin() {
   $('staff-name').textContent = '';
   $('content').replaceChildren();
   $('dialog').close();
+  user = null;
   $('push-onboarding')?.close();
+  $('install-onboarding')?.close();
   $('sign-in').hidden = false;
 }
 
@@ -139,7 +141,13 @@ function renderTickets({tickets,technicians,pushKey,limit}) {
     $('new-ticket').onclick = newTicket;
     $('new-staff').onclick = newStaff;
   }
-  if (user.role === 'technician' && pushKey) registerPush(pushKey);
+  if (user.role === 'technician') {
+    renderAlertButton(pushKey);
+    if (pushKey && pushSupported() && Notification.permission === 'granted') {
+      registerPush(pushKey).catch(() => notice('Could not register assignment alerts. Use Allow assignment alerts to try again.'));
+    }
+    showTechnicianOnboarding(pushKey);
+  }
   const technicianOptions = [['','Unassigned'],...technicians.map(t => [t.user_id,t.name])];
   const repairStatuses = { Assigned:['In Progress','Awaiting Parts','Repair Complete'], 'In Progress':['Awaiting Parts','Repair Complete'], 'Awaiting Parts':['In Progress','Repair Complete'] };
   $('content').innerHTML = '<form id="ticket-filter" class="inline-form">' +
@@ -251,58 +259,116 @@ async function subscribe(registration,key) {
   }
   await request('subscribe',subscription.toJSON());
 }
-let pushPromptShownFor;
+let pushDecisionPending = false;
+let installEvent;
 
-function showPushOnboarding(enable) {
-  const staffId = user.user_id;
-  const marker = 'jyoti-push-onboarding:' + staffId;
-  if (pushPromptShownFor === staffId || localStorage.getItem(marker) || $('push-onboarding')?.open) return;
+window.addEventListener('beforeinstallprompt', event => {
+  event.preventDefault();
+  installEvent = event;
+});
+window.addEventListener('appinstalled', () => {
+  installEvent = null;
+  localStorage.setItem('jyoti-app-installed','yes');
+  $('install-onboarding')?.close();
+});
 
+const lightRedAlert = 'background:#fee2e2;color:#7f1d1d;border-color:#fca5a5';
+const pushSupported = () => 'serviceWorker' in navigator && 'Notification' in window && 'PushManager' in window;
+const installed = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone ||
+  localStorage.getItem('jyoti-app-installed') === 'yes';
+
+function onboardingDialog(id, icon, title, description, action, onAction, onClose) {
   const dialog = document.createElement('dialog');
-  dialog.id = 'push-onboarding';
-  dialog.setAttribute('aria-labelledby','push-onboarding-title');
-  dialog.setAttribute('aria-describedby','push-onboarding-description');
+  dialog.id = id;
+  dialog.setAttribute('aria-labelledby',id+'-title');
+  dialog.setAttribute('aria-describedby',id+'-description');
   dialog.style.width = 'min(420px, calc(100% - 24px))';
   dialog.style.textAlign = 'center';
-  dialog.innerHTML = '<div aria-hidden="true" style="font-size:2.5rem;margin-bottom:.6rem">🔔</div>'+
-    '<h2 id="push-onboarding-title">Enable assignment alerts</h2>'+
-    '<p id="push-onboarding-description">Get a notification on this device when a new job is assigned to you.</p>'+
-    '<div class="grid" style="margin-top:1rem">'+btn('Allow assignment alerts','push-onboarding-allow')+
-    btn('Not now','push-onboarding-later',true)+'</div>';
+  dialog.innerHTML = '<div aria-hidden="true" style="font-size:2.5rem;margin-bottom:.6rem">'+icon+'</div>'+
+    '<h2 id="'+id+'-title">'+title+'</h2><p id="'+id+'-description">'+description+'</p>'+
+    '<div class="grid" style="margin-top:1rem">'+btn(action,id+'-action')+btn('Not now',id+'-later',true)+'</div>';
 
-  dialog.addEventListener('close',() => dialog.remove(),{once:true});
-  dialog.querySelector('#push-onboarding-allow').onclick = () => {
-    enable();
-    dialog.close();
-  };
-  dialog.querySelector('#push-onboarding-later').onclick = () => dialog.close();
+  dialog.addEventListener('close',() => { dialog.remove(); onClose?.(); },{once:true});
+  dialog.querySelector('#'+id+'-action').onclick = event => onAction(dialog,event.currentTarget);
+  dialog.querySelector('#'+id+'-later').onclick = () => dialog.close();
   document.body.append(dialog);
   dialog.showModal();
-  pushPromptShownFor = staffId;
-  localStorage.setItem(marker,'shown');
+  return dialog;
 }
 
-function registerPush(key, reportSuccess = false) {
-  if (!('serviceWorker' in navigator) || !('Notification' in window) || !('PushManager' in window)) return;
-  if (Notification.permission === 'default') {
-    const enable = async () => {
-      try {
-        if (await Notification.requestPermission() === 'granted') registerPush(key,true);
-        else if (Notification.permission === 'denied') $('push')?.remove();
-      } catch (error) { notice(error.message); }
-    };
-    $('page-actions').innerHTML = btn('Allow assignment alerts','push',true);
-    $('push').onclick = enable;
-    showPushOnboarding(enable);
+function renderAlertButton(key) {
+  $('page-actions').insertAdjacentHTML('beforeend',btn('Allow assignment alerts','push'));
+  const button = $('push');
+  button.style.cssText = lightRedAlert;
+  button.onclick = () => enablePush(key);
+}
+
+async function enablePush(key) {
+  if (!key) { notice('Assignment alerts are unavailable right now.'); return; }
+  if (!pushSupported()) { notice('Open Jyoti in a browser that supports push alerts, or install it on your home screen.'); return; }
+  try {
+    const permission = Notification.permission === 'default' ? await Notification.requestPermission() : Notification.permission;
+    if (permission === 'granted') {
+      await registerPush(key);
+      notice('Assignment alerts are enabled on this device.');
+    } else if (permission === 'denied') {
+      notice('Alerts are blocked. Allow notifications for Jyoti in your browser’s site settings.');
+    }
+  } catch {
+    notice('Could not register assignment alerts. Please try again.');
+  }
+}
+
+function registerPush(key) {
+  pushRegistration ||= navigator.serviceWorker.register('/sw.js').then(() => navigator.serviceWorker.ready)
+    .then(reg => subscribe(reg,key))
+    .catch(error => { pushRegistration = null; throw error; });
+  return pushRegistration;
+}
+
+function showInstallOnboarding() {
+  if (user?.role !== 'technician' || !session || installed() ||
+      $('install-onboarding')?.open || localStorage.getItem('jyoti-install-prompt')) return;
+  const dialog = onboardingDialog('install-onboarding','📲','Install Jyoti Service Desk',
+    'Add Jyoti to your home screen so you can open your assigned jobs in one tap.',
+    'Install app', async (modal,button) => {
+      if (!installEvent) {
+        $('install-onboarding-description').textContent = /iPad|iPhone|iPod/.test(navigator.userAgent)
+          ? 'In Safari, tap Share, then Add to Home Screen.'
+          : 'Open your browser menu and choose Install app or Add to Home screen.';
+        button.hidden = true;
+        return;
+      }
+      const prompt = installEvent;
+      installEvent = null;
+      try { await prompt.prompt(); modal.close(); }
+      catch { notice('Use your browser menu to install Jyoti Service Desk.'); }
+    });
+  localStorage.setItem('jyoti-install-prompt','shown');
+  return dialog;
+}
+
+function showTechnicianOnboarding(key) {
+  if (pushDecisionPending || $('push-onboarding')?.open) return;
+  const marker = 'jyoti-push-onboarding:' + user.user_id;
+  if (!key || !pushSupported() || Notification.permission !== 'default' || localStorage.getItem(marker)) {
+    showInstallOnboarding();
     return;
   }
-  if (Notification.permission === 'granted' && !pushRegistration) {
-    pushRegistration = navigator.serviceWorker.register('/sw.js').then(() => navigator.serviceWorker.ready)
-      .then(reg => subscribe(reg,key))
-      .then(() => { if (reportSuccess) notice('Assignment alerts enabled'); })
-      .catch(() => { pushRegistration = null;notice('Could not register assignment alerts. Open your tickets to see assignments.'); });
-    $('push')?.remove();
-  }
+
+  const dialog = onboardingDialog('push-onboarding','🔔','Enable assignment alerts',
+    'Get a notification on this device when a new job is assigned to you.',
+    'Allow assignment alerts', async (modal,button) => {
+      pushDecisionPending = true;
+      button.disabled = true;
+      try { await enablePush(key); }
+      finally {
+        pushDecisionPending = false;
+        if (modal.open) modal.close(); else showInstallOnboarding();
+      }
+    },() => { if (!pushDecisionPending) showInstallOnboarding(); });
+  dialog.querySelector('#push-onboarding-action').style.cssText = lightRedAlert;
+  localStorage.setItem(marker,'shown');
 }
 
 function editableLines(title,items,existing,priced,save,fields = '') {
