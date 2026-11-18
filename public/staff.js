@@ -144,9 +144,6 @@ function renderTickets({tickets,technicians,pushKey,limit}) {
   }
   if (user.role === 'technician') {
     renderAlertButton(pushKey);
-    if (pushKey && pushSupported() && Notification.permission === 'granted') {
-      registerPush(pushKey).catch(() => notice('Could not register assignment alerts. Use Allow assignment alerts to try again.'));
-    }
     showTechnicianOnboarding(pushKey);
   }
   const technicianOptions = [['','Unassigned'],...technicians.map(t => [t.user_id,t.name])];
@@ -321,15 +318,38 @@ function renderAlertButton(key) {
   const button = $('push');
   button.style.cssText = lightRedAlert;
   button.onclick = () => enablePush(key);
+  if (key && pushSupported() && Notification.permission === 'granted') {
+    button.disabled = true;
+    button.textContent = 'Checking assignment alerts…';
+    registerPush(key).then(() => showPushEnabled(button)).catch(() => {
+      if (!button.isConnected) return;
+      button.disabled = false;
+      button.textContent = 'Allow assignment alerts';
+      notice('Could not register assignment alerts. Use Allow assignment alerts to try again.');
+    });
+  }
+}
+
+function showPushEnabled(button) {
+  if (!button?.isConnected) return;
+  const status = document.createElement('span');
+  status.className = 'badge';
+  status.setAttribute('role','status');
+  status.style.cssText = 'background:#dcfce7;color:#166534';
+  status.textContent = 'Assignment alerts enabled';
+  button.replaceWith(status);
 }
 
 async function enablePush(key) {
   if (!key) { notice('Assignment alerts are unavailable right now.'); return; }
   if (!pushSupported()) { notice('Open Jyoti in a browser that supports push alerts, or install it on your home screen.'); return; }
+  const staffId = user?.user_id;
   try {
     const permission = Notification.permission === 'default' ? await Notification.requestPermission() : Notification.permission;
-    if (permission === 'granted') {
+    if (permission === 'granted' && user?.user_id === staffId) {
       await registerPush(key);
+      if (user?.user_id !== staffId) return;
+      showPushEnabled($('push'));
       notice('Assignment alerts are enabled on this device.');
     } else if (permission === 'denied') {
       notice('Alerts are blocked. Allow notifications for Jyoti in your browser’s site settings.');
