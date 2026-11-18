@@ -258,7 +258,7 @@ async function staffAction(action, req, input) {
       const id = parse(uuid,input.id);
       const [booking,parts] = await Promise.all([
         read(db.from('service_tickets').select('customer_name,service_address,locality,city,ticket_number,status').eq('id',id).single()),
-        read(db.from('ticket_parts').select('quantity,items(description,uom,hsn_sac,sale_price,tax_rate)').eq('ticket_id',id)),
+        read(db.from('ticket_parts').select('item_id,quantity,items(description,uom,hsn_sac,sale_price,tax_rate)').eq('ticket_id',id)),
       ]);
       if (booking.status !== 'Repair Complete') throw new HttpError(422,'Finish the repair before billing');
       return { booking,parts };
@@ -267,7 +267,10 @@ async function staffAction(action, req, input) {
       const data = parse(forms.invoice,input);
       const start = Number(process.env.INVOICE_START_NUMBER || 1);
       if (!Number.isSafeInteger(start) || start < 1) throw new HttpError(503,'The invoice sequence is being configured');
-      return read(db.rpc('issue_service_invoice',{p_ticket:data.id,p_fee:data.fee,p_tax_rate:data.tax_rate,p_gstin:data.gstin,p_issuer:issuerDetails(),p_start:start}));
+      return read(db.rpc('issue_discounted_service_invoice',{
+        p_ticket:data.id,p_fee:data.fee,p_tax_rate:data.tax_rate,p_gstin:data.gstin,p_issuer:issuerDetails(),p_start:start,
+        p_prices:data.prices,p_discount_type:data.discount_type,p_discount_value:data.discount_value,
+      }));
     }
     case 'payment': {
       const p = parse(forms.payment,input);

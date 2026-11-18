@@ -1,3 +1,5 @@
+self.addEventListener("install", event => event.waitUntil(self.skipWaiting()));
+
 self.addEventListener('push', event => {
   let payload;
   try { payload = event.data?.json(); } catch { return; }
@@ -15,11 +17,17 @@ self.addEventListener('notificationclick', event => {
   const url = new URL('/staff', self.location.origin);
   if (/^[1-9][0-9]{4}$/.test(String(number))) url.searchParams.set('ticket',number);
   event.waitUntil((async () => {
-    const windows = await self.clients.matchAll({ type: 'window' });
-    const staff = windows.find(client => new URL(client.url).pathname.startsWith('/staff'));
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const staff = windows.find(client => ['/staff', '/staff.html'].includes(new URL(client.url).pathname));
     if (staff) {
-      await staff.navigate(url.href);
-      return staff.focus();
+      try {
+        const focused = await staff.focus();
+        if (focused.url === url.href) return focused;
+        const navigated = await focused.navigate(url.href);
+        if (navigated) return navigated;
+      } catch {
+        // The existing window can disappear while the notification is being handled.
+      }
     }
     return self.clients.openWindow(url.href);
   })());

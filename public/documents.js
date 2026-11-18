@@ -87,7 +87,12 @@ export function printInvoice(bill) {
     taxes.set(l.tax_rate,tax);
   }
   const totalTax = Number(bill.cgst)+Number(bill.sgst);
-  const fillerHeight = Math.max(0, 116 - bill.lines.length * 5);
+  const discount = Number(bill.discount_amount);
+  const summaryRow = (label, amount) => '<tr class="invoice-grand"><td colspan="6" class="num">'+label+'</td><td class="num invoice-total">'+amount+'</td></tr>';
+  const discountRows = discount > 0 ? summaryRow('Total before discount (incl. GST)',inr(bill.gross_total))+
+    summaryRow('Discount ('+inr(bill.discount_percent)+'%)','−'+inr(discount)) : '';
+  const rounding = Number(bill.rounding_adjustment);
+  const fillerHeight = Math.max(0, 116 - bill.lines.length * 5 - (discountRows ? 10 : 0) - (rounding ? 5 : 0));
   const filler = fillerHeight ? '<tr class="invoice-filler" aria-hidden="true" style="height:'+fillerHeight+'mm">'+'<td></td>'.repeat(7)+'</tr>' : '';
   documentWindow('Invoice '+bill.number,
     '<main class="invoice-frame"><header class="invoice-heading">'+
@@ -99,11 +104,12 @@ export function printInvoice(bill) {
     '<div class="invoice-row">'+recipient('Billed to :')+recipient('Shipped to :')+'</div>'+
     '<table class="invoice-items"><colgroup><col style="width:5.5%"><col style="width:42%"><col style="width:9%"><col style="width:9%"><col style="width:7.5%"><col style="width:12%"><col style="width:15%"></colgroup>'+
     '<thead><tr><th>S.N.</th><th>Description of Goods / Services</th><th>HSN/SAC<br>Code</th><th class="num">Qty.</th><th>Unit</th><th class="num">Price</th><th class="num">Amount (₹)</th></tr></thead><tbody>'+
-    bill.lines.map((l,i)=>'<tr><td class="num">'+(i+1)+'.</td><td>'+e(l.description)+'</td><td>'+e(l.hsn_sac)+'</td><td class="num">'+e(l.quantity)+'</td><td>'+e(l.uom)+'</td><td class="num">'+inr(l.unit_price)+'</td><td class="num">'+inr(l.amount)+'</td></tr>').join('')+
-    filler+'<tr class="invoice-grand"><td colspan="6" class="num">Grand Total</td><td class="num invoice-total">₹ '+inr(bill.total)+'</td></tr></tbody></table>'+
+    bill.lines.map((l,i)=>'<tr><td class="num">'+(i+1)+'.</td><td>'+e(l.description)+'</td><td>'+e(l.hsn_sac)+'</td><td class="num">'+e(l.quantity)+'</td><td>'+e(l.uom)+'</td><td class="num">'+inr(l.unit_price)+'</td><td class="num">'+inr(l.base_before_discount ?? l.amount)+'</td></tr>').join('')+
+    filler+discountRows+summaryRow('Grand Total','₹ '+inr(bill.total))+'</tbody></table>'+
     '<div class="invoice-tax"><table><thead><tr><th>Tax Rate</th><th>Taxable Amt.</th><th>CGST Amt.</th><th>SGST Amt.</th><th>Total Tax</th></tr></thead><tbody>'+
     [...taxes.entries()].map(([rate,t])=>'<tr><td>'+e(rate)+'%</td><td class="num">'+inr(t.amount)+'</td><td class="num">'+inr(t.cgst)+'</td><td class="num">'+inr(t.sgst)+'</td><td class="num">'+inr(t.cgst+t.sgst)+'</td></tr>').join('')+
     '<tr><th>Total</th><td class="num">'+inr(bill.subtotal)+'</td><td class="num">'+inr(bill.cgst)+'</td><td class="num">'+inr(bill.sgst)+'</td><td class="num">'+inr(totalTax)+'</td></tr></tbody></table>'+
+    (rounding ? '<p>Rounding adjustment to taxable amount plus GST: ₹ '+inr(rounding)+'</p>' : '')+
     '<p class="invoice-words"><strong>'+e(amountWords(bill.total))+'</strong></p></div>'+
     '<div class="invoice-bank"><strong>Bank Details :</strong> '+e(issuer.bank)+'<br>Account No. : '+e(issuer.account)+' · IFSC : '+e(issuer.ifsc)+'</div>'+
     '<div class="invoice-row"><div class="invoice-terms"><strong>Terms &amp; Conditions</strong><br>E.&amp; O.E.<ol><li>Goods once sold will not be taken back.</li><li>Interest @ 18% p.a. will be charged if the payment is not made within the stipulated time.</li><li>Subject to Ambikapur jurisdiction only.</li></ol></div>'+

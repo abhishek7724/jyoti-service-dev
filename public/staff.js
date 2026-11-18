@@ -60,6 +60,7 @@ async function request(action,input = {},auth = true) {
 function showLogin() {
   persistSession(null);
   pageGeneration++;
+  $('boot-status').hidden = true;
   $('desk').hidden = true;
   $('logout').hidden = true;
   $('staff-name').textContent = '';
@@ -76,11 +77,15 @@ function submit(form, handler, errorTarget) {
     event.preventDefault();
     const button = event.submitter || form.querySelector('button:not([type="button"])');
     if (button?.disabled) return;
-    if (button) button.disabled = true;
+    const label = button?.textContent;
+    if (button) {
+      button.disabled = true;
+      button.textContent = form.id === 'login-form' ? 'Signing in…' : form.id === 'ticket-filter' ? 'Searching…' : 'Working…';
+    }
     if (errorTarget) errorTarget.textContent = '';
     try { await handler(formData(form), form); }
     catch (error) { if (errorTarget) errorTarget.textContent = error.message; else notice(error.message); }
-    finally { if (button) button.disabled = false; }
+    finally { if (button) { button.disabled = false; button.textContent = label; } }
   });
 }
 
@@ -107,12 +112,15 @@ function numberFields(data, ...names) {
 async function load() {
   const generation = ++pageGeneration;
   const selectedPage = page;
+  $('boot-status').textContent = 'Loading '+pages[selectedPage].toLowerCase()+'…';
+  $('boot-status').hidden = false;
   try {
     const data = await request(selectedPage === 'tickets' ? 'dashboard' : selectedPage,
       selectedPage === 'tickets' ? { offset, openOnly:ticketScope === 'open', status:ticketStatuses.includes(ticketScope) ? ticketScope : undefined, ticket:filter } : {});
     if (generation !== pageGeneration) return;
     if (selectedPage === 'tickets') user = data.staff;
     $('staff-name').textContent = user.name;
+    $('boot-status').hidden = true;
     $('desk').hidden = false;
     $('logout').hidden = false;
     $('sign-in').hidden = true;
@@ -125,7 +133,15 @@ async function load() {
     if (selectedPage === 'catalog') renderCatalog(data);
     if (selectedPage === 'purchases') renderPurchases(data);
     if (selectedPage === 'billing') renderBilling(data);
-  } catch (error) { if (error.status !== 401) notice(error.message); }
+  } catch (error) {
+    if (generation !== pageGeneration || error.status === 401) return;
+    if (!$('boot-status').hidden) {
+      const retry = document.createElement('button');
+      retry.textContent = 'Retry';
+      retry.onclick = () => { $('boot-status').textContent = 'Loading service tickets…'; load(); };
+      $('boot-status').replaceChildren(error.message + ' ', retry);
+    } else notice(error.message);
+  }
 }
 
 function mapsLink(t) {
@@ -177,7 +193,13 @@ function renderTickets({tickets,technicians,pushKey,limit}) {
     offset = 0;
     await load();
   });
-  $('refresh-tickets').onclick = load;
+  $('refresh-tickets').onclick = async event => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = 'Refreshing…';
+    try { await load(); }
+    finally { button.disabled = false; button.textContent = 'Refresh'; }
+  };
   if ($('page-prev')) $('page-prev').onclick = () => { offset -= limit; load(); };
   if ($('page-next')) $('page-next').onclick = () => { offset += limit; load(); };
   $('content').querySelectorAll('[data-assign]').forEach(form => submit(form,async data => {
@@ -519,6 +541,29 @@ function renderPurchases({orders,items,suppliers}) {
   for (const button of $('content').querySelectorAll('[data-supplier-pay]')) button.onclick = () => paymentModal(bills.find(b=>b.id===button.dataset.supplierPay),'supplier_bill_id');
 }
 
+function updateInvoiceDraft(form, parts) {
+  const fields = form.elements;
+  const type = fields.discount_type.value;
+  const value = fields.discount_value;
+  value.disabled = type === 'none';
+  value.required = !value.disabled;
+  const grossLine = (price, quantity, rate) => {
+    const base = Math.round(Number(price) * 100) * Math.round(Number(quantity) * 1000);
+    const paise = Math.round(base / 1000);
+    return paise + 2 * Math.round(paise * Math.round(Number(rate) * 100) / 20000);
+  };
+  const gross = parts.reduce((sum, part) => sum + grossLine(
+    fields['price-'+part.item_id].value, part.quantity, part.items.tax_rate
+  ), grossLine(fields.fee.value, 1, fields.tax_rate.value));
+  value.max = type === 'percent' ? '100' : String(gross / 100);
+  const entered = Math.round(Number(value.value) * 100);
+  const discount = type === 'none' ? 0 : type === 'fixed' ? entered : Math.round(gross * entered / 10000);
+  const percent = type === 'percent' ? Number(value.value) : gross ? discount / gross * 100 : 0;
+  form.querySelector('[data-invoice-summary]').innerHTML = '<p>Total before discount (incl. GST) '+money(gross/100)+'</p>'+
+    (type === 'none' ? '' : '<p>Discount ('+percent.toFixed(2)+'%) −'+money(discount/100)+'</p>')+
+    (value.validity.valid ? '<p><strong>Amount payable '+money((gross-discount)/100)+'</strong></p>' : '');
+}
+
 function renderBilling({completed,invoices}) {
   $('content').innerHTML = '<section class="panel"><h2>Ready to bill</h2>'+
     (completed.length ? completed.map(t=>'<div class="card-actions"><strong>#'+t.ticket_number+' · '+e(t.customer_name)+'</strong><button data-draft="'+e(t.id)+'">Review invoice</button></div>').join('') :
@@ -533,18 +578,34 @@ function renderBilling({completed,invoices}) {
           (b.service_tickets?.mobile ? '<a href="tel:+91'+e(b.service_tickets.mobile)+'">Call customer</a>' : '') : '')+'</div>';
     }).join('') : '<p class="muted">No invoices issued yet.</p>')+'</section>';
   for (const button of $('content').querySelectorAll('[data-draft]')) button.onclick = async () => {
+    button.disabled = true;
+    button.textContent = 'Loading invoice…';
     try {
       const {booking,parts} = await request('invoiceDraft',{id:button.dataset.draft});
-      modal('Invoice draft · Ticket #'+booking.ticket_number,
+      if (!button.isConnected || $('dialog').open) return;
+      const form = modal('Invoice draft · Ticket #'+booking.ticket_number,
         '<p><strong>Bill To and Ship To</strong><br>'+e(booking.customer_name)+'<br>'+[booking.service_address,booking.locality,booking.city].map(e).join(', ')+'</p>'+
-        parts.map(p=>'<p>'+e(p.items.description)+' · '+e(p.quantity)+' '+e(p.items.uom)+' × '+money(p.items.sale_price)+'</p>').join('')+
+        parts.map(p=>input(e(p.items.description)+' · '+e(p.quantity)+' '+e(p.items.uom)+' · Unit price (₹)',
+          'price-'+p.item_id,'type="number" min="0" max="9999999" step="0.01" required value="'+e(p.items.sale_price)+'"')).join('')+
         '<div class="pair">'+input('Service charge','fee','type="number" min="0" step="0.01" required')+
         input('Service tax rate %','tax_rate','type="number" min="0" max="100" step="0.01" required')+'</div>'+
-        input('Customer GSTIN (optional)','gstin','maxlength="15"'),'Issue invoice',async data=>{
-          const result = await request('invoice',{id:button.dataset.draft,...numberFields(data,'fee','tax_rate')});
+        input('Customer GSTIN (optional)','gstin','maxlength="15"')+
+        '<div class="pair">'+select('Discount','discount_type', [['none','No discount'],['percent','Percentage (%)'],['fixed','Fixed amount (₹)']],'none')+
+        input('Discount value','discount_value','type="number" min="0" step="0.01" disabled')+'</div>'+
+        '<div data-invoice-summary aria-live="polite"></div>',
+        'Issue invoice',async data=>{
+          const result = await request('invoice',{
+            id:button.dataset.draft, fee:Number(data.fee), tax_rate:Number(data.tax_rate), gstin:data.gstin,
+            prices:parts.map(p=>({item_id:p.item_id,price:Number(data['price-'+p.item_id])})),
+            discount_type:data.discount_type, discount_value:Number(data.discount_value || 0),
+          });
           return 'Invoice '+result.number+' issued';
         });
+      const update = () => updateInvoiceDraft(form,parts);
+      form.addEventListener('input',update);
+      update();
     } catch (error) { notice(error.message); }
+    finally { button.disabled = false; button.textContent = 'Review invoice'; }
   };
   for (const button of $('content').querySelectorAll('[data-invoice-print]')) button.onclick = () => printInvoice(invoices.find(b=>b.id===button.dataset.invoicePrint));
   for (const button of $('content').querySelectorAll('[data-invoice-pay]')) button.onclick = () => paymentModal(invoices.find(b=>b.id===button.dataset.invoicePay),'invoice_id');
@@ -571,3 +632,4 @@ submit($('login-form'),async (data,form) => {
   await load();
 });
 if (session) load();
+else showLogin();
