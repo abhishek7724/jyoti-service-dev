@@ -64,6 +64,7 @@ function showLogin() {
   $('staff-name').textContent = '';
   $('content').replaceChildren();
   $('dialog').close();
+  $('push-onboarding')?.close();
   $('sign-in').hidden = false;
 }
 
@@ -250,21 +251,57 @@ async function subscribe(registration,key) {
   }
   await request('subscribe',subscription.toJSON());
 }
-function registerPush(key) {
+let pushPromptShownFor;
+
+function showPushOnboarding(enable) {
+  const staffId = user.user_id;
+  const marker = 'jyoti-push-onboarding:' + staffId;
+  if (pushPromptShownFor === staffId || localStorage.getItem(marker) || $('push-onboarding')?.open) return;
+
+  const dialog = document.createElement('dialog');
+  dialog.id = 'push-onboarding';
+  dialog.setAttribute('aria-labelledby','push-onboarding-title');
+  dialog.setAttribute('aria-describedby','push-onboarding-description');
+  dialog.style.width = 'min(420px, calc(100% - 24px))';
+  dialog.style.textAlign = 'center';
+  dialog.innerHTML = '<div aria-hidden="true" style="font-size:2.5rem;margin-bottom:.6rem">🔔</div>'+
+    '<h2 id="push-onboarding-title">Enable assignment alerts</h2>'+
+    '<p id="push-onboarding-description">Get a notification on this device when a new job is assigned to you.</p>'+
+    '<div class="grid" style="margin-top:1rem">'+btn('Allow assignment alerts','push-onboarding-allow')+
+    btn('Not now','push-onboarding-later',true)+'</div>';
+
+  dialog.addEventListener('close',() => dialog.remove(),{once:true});
+  dialog.querySelector('#push-onboarding-allow').onclick = () => {
+    enable();
+    dialog.close();
+  };
+  dialog.querySelector('#push-onboarding-later').onclick = () => dialog.close();
+  document.body.append(dialog);
+  dialog.showModal();
+  pushPromptShownFor = staffId;
+  localStorage.setItem(marker,'shown');
+}
+
+function registerPush(key, reportSuccess = false) {
   if (!('serviceWorker' in navigator) || !('Notification' in window) || !('PushManager' in window)) return;
   if (Notification.permission === 'default') {
-    $('page-actions').innerHTML = btn('Allow assignment alerts','push',true);
-    $('push').onclick = async () => {
+    const enable = async () => {
       try {
-        if (await Notification.requestPermission() === 'granted') { registerPush(key);notice('Assignment alerts enabled'); }
+        if (await Notification.requestPermission() === 'granted') registerPush(key,true);
+        else if (Notification.permission === 'denied') $('push')?.remove();
       } catch (error) { notice(error.message); }
     };
+    $('page-actions').innerHTML = btn('Allow assignment alerts','push',true);
+    $('push').onclick = enable;
+    showPushOnboarding(enable);
     return;
   }
   if (Notification.permission === 'granted' && !pushRegistration) {
     pushRegistration = navigator.serviceWorker.register('/sw.js').then(() => navigator.serviceWorker.ready)
-      .then(reg => subscribe(reg,key)).catch(() => { pushRegistration = null;notice('Could not register assignment alerts. Open your tickets to see assignments.'); });
-    $('page-actions').replaceChildren();
+      .then(reg => subscribe(reg,key))
+      .then(() => { if (reportSuccess) notice('Assignment alerts enabled'); })
+      .catch(() => { pushRegistration = null;notice('Could not register assignment alerts. Open your tickets to see assignments.'); });
+    $('push')?.remove();
   }
 }
 
