@@ -161,8 +161,7 @@ function renderTickets({tickets,technicians,pushKey,limit}) {
         actions.push('<button type="button" class="secondary" data-ticket-po="'+e(t.id)+'">Create PO</button>');
       }
       if (user.role === 'technician' && repairStatuses[t.status]) {
-        actions.push('<button data-parts="'+e(t.id)+'" class="secondary">'+(t.parts_reviewed?'Edit parts used':'Record parts used')+'</button>');
-        const statuses = repairStatuses[t.status].filter(s => s !== 'Repair Complete' || t.parts_reviewed);
+        const statuses = [placeholder('Choose progress'),...repairStatuses[t.status]];
         actions.push('<form data-status="'+e(t.id)+'">'+select('Progress','status',statuses)+submitButton('Update')+'</form>');
       }
       return '<article class="panel"'+(awaitingParts?' style="background:#fff1f2;border-color:#fca5a5"':'')+'><div class="section-title"><h2>#'+t.ticket_number+' · '+e(t.appliance)+'</h2><span class="badge"'+(awaitingParts?' style="'+lightRedAlert+'"':'')+'>'+e(t.status)+'</span></div>'+
@@ -186,10 +185,26 @@ function renderTickets({tickets,technicians,pushKey,limit}) {
     notice(result.notification || 'Assignment saved');
     await load();
   }));
-  $('content').querySelectorAll('[data-status]').forEach(form => submit(form,async data => {
-    await request('status',{ id:form.dataset.status,status:data.status });
-    notice('Progress updated'); await load();
-  }));
+  for (const form of $('content').querySelectorAll('[data-status]')) {
+    const progress = form.elements.status;
+    progress.onchange = () => { if (progress.value === 'Repair Complete') form.requestSubmit(); };
+    submit(form,async ({status}) => {
+      const id = form.dataset.status;
+      if (status === 'Repair Complete') {
+        progress.value = '';
+        const {items,parts} = await request('parts',{id});
+        if (!form.isConnected || $('dialog').open) return;
+        editableLines('Parts used',items,parts,false,async lines => {
+          await request('saveParts',{id,parts:lines});
+          await request('status',{id,status});
+          return 'Repair completed and ready for billing';
+        },'','Save parts and complete repair');
+        return;
+      }
+      await request('status',{id,status});
+      notice('Progress updated'); await load();
+    });
+  }
   for (const button of $('content').querySelectorAll('[data-ticket-po]')) button.onclick = async () => {
     const ticket = tickets.find(t => t.id === button.dataset.ticketPo);
     button.disabled = true;
@@ -200,15 +215,6 @@ function renderTickets({tickets,technicians,pushKey,limit}) {
       notice(error.message);
     } finally { button.disabled = false; }
   };
-  $('content').querySelectorAll('[data-parts]').forEach(button => { button.onclick = async () => {
-    try {
-      const {items,parts} = await request('parts',{id:button.dataset.parts});
-      editableLines('Parts used',items,parts,false,async lines => {
-        await request('saveParts',{id:button.dataset.parts,parts:lines});
-        return lines.length ? 'Parts recorded' : 'Confirmed that no parts were used';
-      });
-    } catch (error) { notice(error.message); }
-  }; });
 }
 
 function newTicket() {
@@ -398,11 +404,11 @@ function showTechnicianOnboarding(key) {
   localStorage.setItem(marker,'shown');
 }
 
-function editableLines(title,items,existing,priced,save,fields = '') {
+function editableLines(title,items,existing,priced,save,fields = '',label = priced ? 'Create purchase order' : 'Save parts used') {
   const byId = new Map(items.map(i => [i.id,i]));
   const form = modal(title,fields+'<div id="lines"></div>'+
     btn('Add line','add-line',true)+(!priced ? '<p class="meta">Save with no lines to confirm no parts were used.</p>' : ''),
-    priced ? 'Create purchase order' : 'Save parts used', (data) => {
+    label, (data) => {
       const lines = [...$('lines').children].map(row => ({
         item_id:row.querySelector('select').value,
         quantity:Number(row.querySelector('[name="quantity"]').value),
