@@ -319,25 +319,13 @@ function renderAlertButton(key) {
   button.style.cssText = lightRedAlert;
   button.onclick = () => enablePush(key);
   if (key && pushSupported() && Notification.permission === 'granted') {
-    button.disabled = true;
-    button.textContent = 'Checking assignment alerts…';
-    registerPush(key).then(() => showPushEnabled(button)).catch(() => {
+    button.hidden = true;
+    registerPush(key).then(() => button.remove()).catch(() => {
       if (!button.isConnected) return;
-      button.disabled = false;
-      button.textContent = 'Allow assignment alerts';
+      button.hidden = false;
       notice('Could not register assignment alerts. Use Allow assignment alerts to try again.');
     });
   }
-}
-
-function showPushEnabled(button) {
-  if (!button?.isConnected) return;
-  const status = document.createElement('span');
-  status.className = 'badge';
-  status.setAttribute('role','status');
-  status.style.cssText = 'background:#dcfce7;color:#166534';
-  status.textContent = 'Assignment alerts enabled';
-  button.replaceWith(status);
 }
 
 async function enablePush(key) {
@@ -349,8 +337,7 @@ async function enablePush(key) {
     if (permission === 'granted' && user?.user_id === staffId) {
       await registerPush(key);
       if (user?.user_id !== staffId) return;
-      showPushEnabled($('push'));
-      notice('Assignment alerts are enabled on this device.');
+      $('push')?.remove();
     } else if (permission === 'denied') {
       notice('Alerts are blocked. Allow notifications for Jyoti in your browser’s site settings.');
     }
