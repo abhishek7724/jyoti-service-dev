@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Jyoti Refrigeration demo website. AC, refrigerator and washing machine repair in Ambikapur, Chhattisgarh.">
+<title>Jyoti Refrigeration | Appliance repair in Ambikapur</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{color-scheme:light;--ink:#122c24;--muted:#485d52;--paper:#faf9f2;--line:#dae2d8;--accent:#dbef8e;--forest:#15382d}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--paper);color:var(--ink);font:1rem/1.55 "DM Sans",sans-serif}a{color:inherit}a:focus-visible{outline:3px solid #b66d24;outline-offset:4px}h1,h2,h3,p{margin-top:0}h1,h2,h3{font-family:"Instrument Sans",sans-serif;line-height:1.04}h1{font-size:clamp(3rem,8vw,6.4rem);letter-spacing:-.075em;margin-bottom:1.25rem;max-width:9ch}h2{font-size:clamp(2rem,5vw,3.6rem);letter-spacing:-.055em;margin-bottom:1rem}h3{font-size:1.4rem;margin-bottom:.6rem}.wrap{width:min(1130px,calc(100% - 2.5rem));margin:auto}.top{border-bottom:1px solid var(--line)}nav{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:1rem;padding:1rem 0}nav a{text-decoration:none;font-weight:700}.brand{display:flex;align-items:center;gap:.7rem}.mark{background:var(--forest);color:white;display:grid;place-items:center;width:2.45rem;height:2.45rem;border-radius:50%}.links{display:flex;gap:1.2rem}.hero{display:grid;grid-template-columns:1.3fr .7fr;align-items:center;gap:3rem;padding:clamp(3rem,9vw,8rem) 0}.kicker{color:var(--muted);font-weight:700;margin-bottom:.9rem}.hero p:not(.kicker){max-width:35rem;font-size:1.13rem;color:var(--muted)}.actions{display:flex;flex-wrap:wrap;gap:.65rem;margin-top:1.6rem}.btn{display:inline-flex;align-items:center;min-height:48px;padding:.65rem 1rem;border:1px solid var(--forest);border-radius:.6rem;text-decoration:none;font-weight:700}.primary{color:white;background:var(--forest)}.primary:hover{background:#245340}.side{background:var(--forest);color:white;border-radius:1.4rem;padding:clamp(1.4rem,4vw,2.7rem);display:grid;gap:1.5rem}.side div+div{border-top:1px solid #ffffff45;padding-top:1.3rem}.side p{margin:0;color:#e0efe7!important;font-size:1rem!important}.side strong{font:700 2.3rem/1.1 "Instrument Sans",sans-serif;letter-spacing:-.05em;color:var(--accent);display:block;margin-bottom:.45rem}.side a{text-underline-offset:.2em}section.band{border-top:1px solid var(--line);padding:clamp(2.5rem,6vw,5rem) 0}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:.85rem;margin-top:1.5rem}.card{padding:1.4rem;border:1px solid var(--line);border-radius:.85rem;background:#fff}.card p,.limit{color:var(--muted);margin-bottom:0}.visit{background:#e8f0e5}.visit .wrap{display:grid;grid-template-columns:1fr 1fr;gap:1rem 3rem;align-items:center}footer .wrap{display:flex;flex-wrap:wrap;gap:.5rem 1.5rem;justify-content:space-between;padding:1.4rem 0;color:var(--muted);font-size:.9rem}@media(max-width:730px){.hero,.visit .wrap{grid-template-columns:1fr;gap:1.4rem}.cards{grid-template-columns:1fr}h1{max-width:11ch}.links{gap:.8rem}}
+
+:root{--ink:#122039;--muted:#46566d;--paper:#fffaf1;--line:#d9dfe7;--accent:#ffbd72;--forest:#142a4a}
+body{font-family:"Source Sans 3",sans-serif}
+h1,h2,h3,.side strong{font-family:"Barlow Condensed",sans-serif;letter-spacing:-.015em}
+h1{font-size:clamp(3.6rem,8vw,7.2rem);line-height:.92;max-width:12ch}
+.top{background:#142a4a;color:#fffaf1;border:0}
+.mark{background:#ffbd72;color:#142a4a;border-radius:.25rem}
+.hero{padding-top:clamp(3rem,8vw,6.5rem);padding-bottom:clamp(3rem,8vw,6.5rem)}
+.side{border-radius:.35rem;border-top:5px solid #ed934c}
+.side p{color:#e7edf7!important}
+.btn{border-radius:.35rem}
+.primary{background:#ffb365;color:#142a4a;border-color:#d5823a}
+.primary:hover{background:#ffc589}
+.card{border-radius:.35rem;border-top:3px solid #ed934c}
+.visit{background:#ecf2fa}
+.kicker{color:#6b492f}
+
+#customer-portal{max-width:680px;margin:0 auto;padding:clamp(1rem,4vw,2rem);background:white;border:1px solid var(--line);border-radius:.35rem}
+#customer-portal form{display:grid;gap:1rem}#customer-portal .pair{display:grid;grid-template-columns:1fr 1fr;gap:.8rem}
+#customer-portal label{display:grid;gap:.35rem;font-weight:600}#customer-portal :is(input,select,textarea,button){width:100%;font:inherit;padding:.65rem;border:1px solid #96a3b4;border-radius:.35rem}
+#customer-portal button{background:#142a4a;color:white;font-weight:700;cursor:pointer}#customer-portal button:disabled{opacity:.55}
+#customer-portal .tabs{display:flex;gap:.5rem;margin-bottom:1.25rem}#customer-portal .secondary,#customer-portal button[aria-pressed="false"]{background:white;color:#142a4a}
+#customer-portal h1{font-size:clamp(2rem,5vw,3rem);max-width:none;margin-bottom:.5rem}
+#customer-portal textarea{resize:vertical;min-height:4rem}#customer-portal .trap{position:absolute;left:-10000px}#customer-portal .error{color:#9b211d}[hidden]{display:none!important}
+@media(max-width:560px){#customer-portal .pair{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header class="top"><nav class="wrap" aria-label="Main navigation"><a href="#top" class="brand"><span class="mark" aria-hidden="true">JR</span>Jyoti Refrigeration</a><div class="links"><a href="#services">Services</a><a href="#visit">Visit the shop</a></div></nav></header>
+<main id="top">
+<div class="wrap hero"><div><p class="kicker">Ambikapur, Chhattisgarh</p><h1>Appliance repair, close to home.</h1><p>Get help with your AC, fridge or washing machine. Bring your appliance to Jyoti Refrigeration or request a home visit in Ambikapur.</p><div class="actions"><a class="btn primary" href="#complaints" data-intake="raise">Raise a complaint</a><a class="btn" href="#complaints" data-intake="track">Track a ticket</a><a class="btn" href="https://www.google.com/maps/search/?api=1&amp;query=Jyoti+Refrigeration+Ambikapur+Chhattisgarh">Get directions</a></div><p class="limit" style="margin-top:.7rem;font-size:.88rem">Get a ticket number after you submit.</p></div><aside class="side" aria-label="Shop at a glance"><div><strong>4.8 ★</strong><p>27 Google ratings in the supplied listing snapshot. <a href="https://www.google.com/search?q=Jyoti+Refrigeration+Ambikapur+Chhattisgarh">View the current Google listing</a>.</p></div><div><strong>Walk in or request a visit</strong><p>Pratappur Naka Road, Ambikapur</p></div></aside></div>
+<section id="complaints" class="band"><div class="wrap"><h2>Complaints and ticket status</h2><div id="customer-portal"><div class="tabs" aria-label="Complaint options"><button type="button" id="raise-tab" aria-pressed="true">Raise a complaint</button><button type="button" id="track-tab" aria-pressed="false">Track a ticket</button></div>
+<section id="raise-panel">
+<h1>Request an appliance repair</h1>
+<p class="muted">Tell us what needs fixing. The shop will contact you to confirm the next step.</p>
+<form id="complaint">
+<div class="pair">
+<label>Customer name<input name="name" autocomplete="name" maxlength="100" required></label>
+<label>Mobile number<input name="mobile" type="tel" inputmode="numeric" autocomplete="tel-national" maxlength="10" pattern="[6-9][0-9]{9}" title="Enter a 10-digit Indian mobile number starting with 6, 7, 8 or 9" required></label>
+</div>
+<div class="pair">
+<label>Appliance<select name="appliance" required><option value="">Choose appliance</option><option>Refrigerator</option><option>Washing Machine</option><option>Air Conditioner</option><option>Television</option><option>Microwave</option><option>Water Purifier</option><option>Water Heater</option><option>Dishwasher</option><option>Chimney</option><option>Mixer Grinder</option><option>Induction Cooktop</option><option>Air Cooler</option><option>Other</option></select></label>
+<label>Brand<select name="brand" required><option value="">Choose brand</option><option>LG</option><option>Samsung</option><option>Whirlpool</option><option>Godrej</option><option>IFB</option><option>Bosch</option><option>Siemens</option><option>Haier</option><option>Panasonic</option><option>Sony</option><option>Voltas</option><option>Blue Star</option><option>Daikin</option><option>Hitachi</option><option>Carrier</option><option>Lloyd</option><option>Onida</option><option>Philips</option><option>Prestige</option><option>Bajaj</option><option>Havells</option><option>Crompton</option><option>Kent</option><option>Aquaguard</option><option>AO Smith</option><option>Racold</option><option>Other</option><option>Unknown</option></select></label>
+</div>
+<label>Service type<select name="service" required><option value="">Choose service</option><option>Home Visit</option><option>Bring to Shop</option><option>Pickup and Return</option><option>Installation</option><option>Preventive Maintenance</option><option>Warranty Service</option></select></label>
+<label>What’s wrong?<textarea name="issue" required maxlength="1000"></textarea></label>
+<label>Service address<textarea name="address" maxlength="500" autocomplete="street-address"></textarea></label>
+<label>Google Maps share link (optional)<input name="maps" type="url" maxlength="750" placeholder="https://maps.app.goo.gl/…"></label>
+<button type="button" class="secondary" id="locate">Use my current location</button>
+<div id="location" aria-live="polite" class="muted"></div>
+<input name="pin" type="hidden">
+<label class="trap" aria-hidden="true">Website<input name="website" tabindex="-1" autocomplete="off"></label>
+<div id="error" aria-live="assertive" class="error"></div>
+<button id="send">Submit complaint</button>
+</form>
+<section id="confirmation" hidden aria-live="polite"><h2>Complaint registered</h2><p>Your ticket number is <strong id="ticket"></strong>. Keep it handy when you contact the shop.</p></section>
+</section>
+<section id="track-panel" hidden>
+<h1>Track a ticket</h1>
+<p class="muted">Enter your five-digit ticket number and the mobile number used for the complaint.</p>
+<form id="track-form">
+<label>Ticket number<input name="ticket" inputmode="numeric" pattern="[1-9][0-9]{4}" maxlength="5" required></label>
+<label>Mobile number<input name="mobile" type="tel" inputmode="numeric" autocomplete="tel-national" pattern="[6-9][0-9]{9}" maxlength="10" required></label>
+<button>Check status</button>
+<div id="track-result" role="status"></div>
+</form>
+</section>
+</div></div></section>
+<section id="services" class="band"><div class="wrap"><h2>What needs fixing?</h2><div class="cards"><article class="card"><h3>Air conditioners</h3><p>For ACs that are no longer cooling properly, leaking, or making unusual noise.</p></article><article class="card"><h3>Refrigerators</h3><p>For fridges and freezers with cooling, frost, or power issues.</p></article><article class="card"><h3>Washing machines</h3><p>For machines that won’t drain, spin, or finish a wash cycle.</p></article></div></div></section>
+<section id="visit" class="band visit"><div class="wrap"><div><h2>Visit Jyoti Refrigeration</h2><p class="limit">Pratappur Naka Road, Ambikapur, Chhattisgarh</p></div><div><p>For a home visit, include your locality and a short description of the issue when you submit a complaint. The form gives you a ticket number to keep for follow-up.</p><a class="btn" href="https://www.google.com/maps/search/?api=1&amp;query=Jyoti+Refrigeration+Ambikapur+Chhattisgarh">Find us on Google Maps</a></div></div></section>
+</main>
+<footer><div class="wrap"><span>Jyoti Refrigeration · Ambikapur</span><a href="/staff">Staff sign in</a></div></footer>
+<script>
+const portal = document.getElementById('customer-portal');
+const trackForm = document.getElementById('track-form');
+const trackResult = document.getElementById('track-result');
+function showPanel(track) {
+  document.getElementById('raise-panel').hidden = track;
+  document.getElementById('track-panel').hidden = !track;
+  document.getElementById('raise-tab').setAttribute('aria-pressed', String(!track));
+  document.getElementById('track-tab').setAttribute('aria-pressed', String(track));
+}
+document.getElementById('raise-tab').addEventListener('click', () => showPanel(false));
+document.getElementById('track-tab').addEventListener('click', () => showPanel(true));
+
+trackForm.addEventListener('submit', event => {
+  event.preventDefault();
+  const button = trackForm.querySelector('button');
+  button.disabled = true;
+  trackResult.textContent = 'Checking status…';
+  request('track', Object.fromEntries(new FormData(trackForm))).then(result => {
+    trackResult.textContent = result ? 'Current status: ' + result.status : 'No matching ticket. Check the number and mobile number.';
+  }).catch(failure => {
+    trackResult.textContent = failure.message;
+  }).finally(() => { button.disabled = false; });
+});
+const form = document.getElementById('complaint');
+const error = document.getElementById('error');
+const locationMessage = document.getElementById('location');
+const send = document.getElementById('send');
+const key = crypto.randomUUID();
+
+form.elements.service.addEventListener('change', () => {
+  form.elements.address.required = ['Home Visit','Pickup and Return','Installation','Preventive Maintenance'].includes(form.elements.service.value);
+});
+document.getElementById('locate').addEventListener('click', () => {
+  if (!navigator.geolocation) {
+    locationMessage.textContent = 'Paste a Google Maps link to share your location.';
+    return;
+  }
+  locationMessage.textContent = 'Getting your location…';
+  navigator.geolocation.getCurrentPosition(({coords}) => {
+    form.elements.pin.value = coords.latitude + ',' + coords.longitude;
+    locationMessage.textContent = 'Location added. You can paste a different Maps link above if needed.';
+  }, () => {
+    locationMessage.textContent = 'Could not access your location. Open Google Maps, choose the service location, and paste its share link above.';
+  }, {enableHighAccuracy:true, timeout:10000});
+});
+form.addEventListener('submit', event => {
+  event.preventDefault();
+  error.textContent = '';
+  send.disabled = true;
+  send.textContent = 'Submitting…';
+  request('submit', {...Object.fromEntries(new FormData(form)), key}).then(result => {
+    document.getElementById('ticket').textContent = result.ticket;
+    trackForm.elements.ticket.value = result.ticket;
+    trackForm.elements.mobile.value = form.elements.mobile.value;
+    form.hidden = true;
+    document.getElementById('confirmation').hidden = false;
+  }).catch(failure => {
+    error.textContent = failure.message || 'Could not submit. Try again.';
+    send.disabled = false;
+    send.textContent = 'Submit complaint';
+  });
+});
+
+document.querySelectorAll('[data-intake]').forEach(link => link.addEventListener('click', () => showPanel(link.dataset.intake === 'track')));
+async function request(action, input) {
+  const response = await fetch('/api/service', {
+    method: 'POST',
+    credentials: 'omit',
+    headers: {'Content-Type': 'text/plain;charset=UTF-8'},
+    body: JSON.stringify({action, input})
+  });
+  if (!response.ok) throw new Error('The service is temporarily unavailable. Please try again.');
+  const data = await response.json();
+  if (!data.ok) throw new Error(data.error);
+  return data.result;
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,329 @@
+import { createHmac } from 'node:crypto';
+import { sendNotification } from 'web-push';
+import { HttpError, clients, read, requireRole, staffSession } from '../lib/db.js';
+import { forms, mobile, staffEmail, ticket, uuid, validatePushEndpoint } from '../lib/validation.js';
+
+const financeRoles = ['manager', 'billing'];
+const publicActions = ['submit','track','login','refresh'];
+const fields = 'id,ticket_number,customer_name,mobile,locality,city,service_address,appliance,brand,service_type,issue,latitude,longitude,maps_url,assigned_to,status,created_at,intake_source,parts_reviewed';
+
+function parse(schema, input) {
+  const result = schema.safeParse(input);
+  if (!result.success) throw new HttpError(422, result.error.issues[0]?.message || 'Check the form fields');
+  return result.data;
+}
+
+async function rateLimit(db, req, action, limit, subject = '') {
+  const secret = process.env.PUBLIC_RATE_LIMIT_SECRET;
+  if (!secret || secret.length < 24) throw new HttpError(503, 'Public access is being configured');
+  const ip = String(req.headers['x-vercel-forwarded-for'] || req.socket?.remoteAddress || 'unknown').split(',')[0].trim();
+  const key = createHmac('sha256', secret).update([action, subject || ip].join(':')).digest('hex');
+  if (!(await read(db.rpc('consume_rate_limit', { p_bucket: key, p_limit: limit, p_window_seconds: 900 })))) {
+    throw new HttpError(429, 'Too many requests. Please wait a few minutes and try again.');
+  }
+}
+
+function optionalMaps(value) {
+  if (!value) return null;
+  if (typeof value !== 'string' || value.length > 750) throw new HttpError(422, 'Enter a valid Google Maps share link');
+  try {
+    const url = new URL(value);
+    const google = ['www.google.com','maps.google.com','google.com','www.google.co.in','maps.google.co.in','maps.app.goo.gl'];
+    if (url.protocol !== 'https:' || url.username || url.password || url.port ||
+        !(google.includes(url.hostname) || (url.hostname === 'goo.gl' && url.pathname.startsWith('/maps/')))) throw new Error();
+    if (url.hostname.startsWith('www.') && !url.pathname.startsWith('/maps')) throw new Error();
+    return url.href;
+  } catch {
+    throw new HttpError(422, 'Enter a valid Google Maps share link');
+  }
+}
+
+function publicTicket(input) {
+  const [latitude, longitude] = typeof input.pin === 'string' && /^-?\d+(\.\d+)?,-?\d+(\.\d+)?$/.test(input.pin)
+    ? input.pin.split(',').map(Number) : [null, null];
+  const service = input.service === 'Pickup and Return' ? 'Home Pickup' : input.service;
+  return parse(ticket, {
+    customer_name: input.name, mobile: input.mobile, locality: 'Ambikapur',
+    service_address: (typeof input.address === 'string' && input.address.trim()) || (['Bring to Shop','Warranty Service'].includes(service) ? 'Jyoti Refrigeration' : ''),
+    appliance: input.appliance, brand: input.brand, service_type: service,
+    issue: input.issue, latitude, longitude, maps_url: optionalMaps(input.maps),
+  });
+}
+
+function sessionView(session) {
+  return { access_token: session.access_token, refresh_token: session.refresh_token, expires_at: session.expires_at };
+}
+
+async function publicAction(action, req, input) {
+  const { db, userDb } = clients();
+  if (action === 'login') {
+    await rateLimit(db, req, action, 30);
+    if (typeof input.username !== 'string' || !input.username.trim() || input.username.length > 150 ||
+        typeof input.password !== 'string' || input.password.length > 100) throw new HttpError(422, 'Enter your staff username and password');
+    const email = staffEmail(input.username);
+    await rateLimit(db, req, 'login-account', 10, email);
+    const { data, error } = await userDb.auth.signInWithPassword({ email, password: input.password });
+    if (error || !data.session) throw new HttpError(401, 'Incorrect staff username or password');
+    const staff = await read(db.from('staff').select('user_id').eq('user_id', data.user.id).eq('active', true).maybeSingle());
+    if (!staff) throw new HttpError(403, 'This account has no active staff access');
+    return sessionView(data.session);
+  }
+  if (action === 'refresh') {
+    if (typeof input.refresh_token !== 'string' || input.refresh_token.length > 1024) throw new HttpError(401, 'Sign in again');
+    const { data, error } = await userDb.auth.refreshSession({ refresh_token: input.refresh_token });
+    if (error || !data.session) throw new HttpError(401, 'Sign in again');
+    return sessionView(data.session);
+  }
+  await rateLimit(db, req, action, action === 'track' ? 25 : 8);
+  if (action === 'track') {
+    const phone = parse(mobile, input.mobile);
+    const number = String(input.ticket);
+    if (!/^[1-9][0-9]{4}$/.test(number)) throw new HttpError(422, 'Enter a five-digit ticket number');
+    await rateLimit(db, req, 'track-ticket', 12, number);
+    return read(db.from('service_tickets').select('status').eq('ticket_number', Number(number)).eq('mobile', phone).maybeSingle());
+  }
+  if (input.website) throw new HttpError(422, 'Could not submit the complaint');
+  const details = publicTicket(input);
+  const key = parse(uuid, input.key);
+  let result = await read(db.from('service_tickets').select('ticket_number').eq('intake_key', key).eq('mobile', details.mobile).maybeSingle());
+  if (!result) {
+    try {
+      result = await read(db.from('service_tickets').insert({ ...details, intake_key: key, intake_source: 'Website' }).select('ticket_number').single());
+    } catch (error) {
+      if (error.status !== 409) throw error;
+      result = await read(db.from('service_tickets').select('ticket_number').eq('intake_key', key).eq('mobile', details.mobile).single());
+    }
+  }
+  return { ticket: result.ticket_number };
+}
+
+async function notify(db, assignee, ticketNumber) {
+  const { WEB_PUSH_PUBLIC_KEY: publicKey, WEB_PUSH_PRIVATE_KEY: privateKey, WEB_PUSH_SUBJECT: subject } = process.env;
+  if (!publicKey || !privateKey || !subject) return 'Push is not configured';
+  const subscriptions = await read(db.from('push_subscriptions').select('endpoint,subscription').eq('user_id', assignee));
+  if (!subscriptions.length) return 'Technician has no notification subscription';
+  let delivered = 0;
+  await Promise.all(subscriptions.map(async ({ endpoint, subscription }) => {
+    if (!validatePushEndpoint(endpoint)) return;
+    try {
+      await sendNotification(subscription, JSON.stringify({
+        title: 'Ticket #' + ticketNumber + ' assigned',
+        body: 'Ticket #' + ticketNumber + ' has been assigned to you.',
+        ticketNumber,
+      }), { vapidDetails: { subject, publicKey, privateKey }, timeout: 4000, TTL: 3600 });
+      delivered++;
+    } catch (error) {
+      if ([404, 410].includes(error.statusCode)) {
+        await db.from('push_subscriptions').delete().eq('endpoint', endpoint).eq('user_id', assignee);
+      }
+    }
+  }));
+  return delivered ? 'Push accepted by notification service' : 'Push could not be delivered';
+}
+
+function issuerDetails() {
+  let issuer;
+  try { issuer = JSON.parse(process.env.INVOICE_ISSUER_JSON || '{}'); } catch { issuer = {}; }
+  for (const field of ['name','address','gstin','bank','account','ifsc']) {
+    if (typeof issuer[field] !== 'string' || !issuer[field].trim()) throw new HttpError(503, 'The invoice issuer is being configured');
+  }
+  return issuer;
+}
+
+async function staffAction(action, req, input) {
+  const { db, userDb, staff } = await staffSession(req);
+  if (action === 'logout') {
+    const token = req.headers.authorization.replace(/^Bearer /i, '');
+    await db.auth.admin.signOut(token, 'local');
+    return { signedOut: true };
+  }
+  if (action === 'dashboard') {
+    const limit = 75;
+    const offset = Number.isInteger(input.offset) && input.offset >= 0 && input.offset <= 15000 ? input.offset : 0;
+    let query = userDb.from('service_tickets').select(fields).order('created_at', { ascending: false }).order('id').range(offset, offset + limit - 1);
+    if (input.openOnly === true) query = query.neq('status','Repair Complete');
+    if (input.ticket !== undefined && input.ticket !== '') {
+      if (!/^[1-9][0-9]{4}$/.test(String(input.ticket))) throw new HttpError(422, 'Enter a five-digit ticket number');
+      query = query.eq('ticket_number', Number(input.ticket));
+    }
+    const [tickets, technicians] = await Promise.all([
+      read(query),
+      staff.role === 'manager' ? read(userDb.from('staff').select('user_id,name').eq('role','technician').eq('active',true).order('name')) : [],
+    ]);
+    return { staff, tickets, technicians, limit, pushKey: staff.role === 'technician' && process.env.WEB_PUSH_PRIVATE_KEY && process.env.WEB_PUSH_SUBJECT ? process.env.WEB_PUSH_PUBLIC_KEY || '' : '' };
+  }
+  if (action === 'createStaff') {
+    requireRole(staff, 'manager');
+    const { username, password, name, role } = parse(forms.staff, input);
+    const { data, error } = await db.auth.admin.createUser({ email: staffEmail(username), password, email_confirm: true });
+    if (error || !data.user) throw new HttpError(error?.status === 422 ? 409 : 422, error?.status === 422 ? 'That username may already be in use' : 'Staff account could not be created');
+    try {
+      await read(db.from('staff').insert({ user_id: data.user.id, name, role }));
+    } catch (failure) {
+      const cleanup = await db.auth.admin.deleteUser(data.user.id);
+      if (cleanup.error) console.error('Staff onboarding cleanup failed', data.user.id);
+      throw failure;
+    }
+    return { username, name };
+  }
+  if (action === 'customerLookup') {
+    requireRole(staff,'manager');
+    const phone = parse(mobile,input.mobile);
+    return read(db.from('service_tickets').select('customer_name,locality,city,service_address')
+      .eq('mobile',phone).order('created_at',{ascending:false}).limit(1).maybeSingle());
+  }
+  if (action === 'createTicket') {
+    requireRole(staff, 'manager');
+    const key = parse(uuid,input.key);
+    if (!['Walk-in','Phone'].includes(input.intake_source)) throw new HttpError(422, 'Choose phone or walk-in');
+    const details = parse(ticket,input);
+    if (details.service_type === 'Home Visit' && details.latitude === null && !details.maps_url) {
+      throw new HttpError(422, 'Add a location pin for the home visit');
+    }
+    details.maps_url = optionalMaps(details.maps_url);
+    const existing = () => read(db.from('service_tickets').select('ticket_number').eq('intake_key',key).eq('created_by',staff.user_id).maybeSingle());
+    const prior = await existing();
+    if (prior) return prior;
+    try {
+      return await read(db.from('service_tickets').insert({ ...details, intake_key:key, created_by:staff.user_id, intake_source:input.intake_source }).select('ticket_number').single());
+    } catch (e) {
+      if (e.status !== 409) throw e;
+      const saved = await existing();
+      if (saved) return saved;
+      throw e;
+    }
+  }
+  if (action === 'assign') {
+    requireRole(staff, 'manager');
+    const { id, technician_id } = parse(forms.assign, input);
+    const previous = await read(userDb.from('service_tickets').select('assigned_to,ticket_number').eq('id',id).single());
+    const updated = await read(userDb.from('service_tickets').update({ assigned_to: technician_id }).eq('id',id).select('status,ticket_number').single());
+    let notification = '';
+    if (technician_id && previous.assigned_to !== technician_id) {
+      try { notification = await notify(db, technician_id, updated.ticket_number); }
+      catch { notification = 'Ticket assigned. Push could not be delivered.'; }
+    }
+    return { ...updated, notification };
+  }
+  if (action === 'status') {
+    requireRole(staff, 'manager','technician');
+    const { id,status } = parse(forms.status,input);
+    return read(userDb.from('service_tickets').update({ status }).eq('id',id).select('status').single());
+  }
+  if (action === 'subscribe') {
+    requireRole(staff,'technician');
+    const subscription = parse(forms.subscription,input);
+    if (!validatePushEndpoint(subscription.endpoint)) throw new HttpError(422,'This browser notification service is unsupported');
+    await read(db.from('push_subscriptions').upsert({ endpoint:subscription.endpoint,user_id:staff.user_id,subscription }));
+    return { subscribed:true };
+  }
+  if (action === 'parts' || action === 'saveParts') {
+    requireRole(staff,'technician');
+    const id = parse(uuid,input.id);
+    await read(userDb.from('service_tickets').select('id').eq('id',id).single());
+    if (action === 'saveParts') {
+      const { parts } = parse(forms.parts,input);
+      return read(db.rpc('save_ticket_parts',{ p_ticket:id,p_user:staff.user_id,p_parts:parts }));
+    }
+    const [items,parts] = await Promise.all([
+      read(db.from('items').select('id,code,description,uom,active').order('code')),
+      read(db.from('ticket_parts').select('item_id,quantity').eq('ticket_id',id)),
+    ]);
+    return { items,parts };
+  }
+  requireRole(staff,...financeRoles);
+  switch (action) {
+    case 'catalog': return catalog(db);
+    case 'item': return read(db.from('items').upsert(parse(forms.item,input),{onConflict:'code'}).select('id').single());
+    case 'supplier': return read(db.from('suppliers').insert(parse(forms.supplier,input)).select('id').single());
+    case 'purchases': return purchases(db);
+    case 'po': {
+      const po = parse(forms.po,input);
+      return read(db.rpc('create_purchase_order',{p_supplier:po.supplier_id,p_ticket:po.ticket_id,p_user:staff.user_id,p_lines:po.lines}));
+    }
+    case 'receipt': {
+      const data = parse(forms.receipt,input);
+      return read(db.rpc('record_receipt',{p_id:data.id,p_line:data.line_id,p_quantity:data.quantity}));
+    }
+    case 'supplierBill': return read(db.from('supplier_bills').insert(parse(forms.supplierBill,input)).select('id').single());
+    case 'billing': return billing(db);
+    case 'invoiceDraft': {
+      const id = parse(uuid,input.id);
+      const [booking,parts] = await Promise.all([
+        read(db.from('service_tickets').select('customer_name,service_address,locality,city,ticket_number,status').eq('id',id).single()),
+        read(db.from('ticket_parts').select('quantity,items(description,uom,hsn_sac,sale_price,tax_rate)').eq('ticket_id',id)),
+      ]);
+      if (booking.status !== 'Repair Complete') throw new HttpError(422,'Finish the repair before billing');
+      return { booking,parts };
+    }
+    case 'invoice': {
+      const data = parse(forms.invoice,input);
+      const start = Number(process.env.INVOICE_START_NUMBER || 1);
+      if (!Number.isSafeInteger(start) || start < 1) throw new HttpError(503,'The invoice sequence is being configured');
+      return read(db.rpc('issue_service_invoice',{p_ticket:data.id,p_fee:data.fee,p_tax_rate:data.tax_rate,p_gstin:data.gstin,p_issuer:issuerDetails(),p_start:start}));
+    }
+    case 'payment': {
+      const p = parse(forms.payment,input);
+      return read(db.rpc('record_payment',{p_id:p.id,p_invoice:p.invoice_id,p_bill:p.supplier_bill_id,p_amount:p.amount,p_method:p.method,p_reference:p.reference}));
+    }
+    default: throw new HttpError(404,'Unknown action');
+  }
+}
+
+async function catalog(db) {
+  const [items,suppliers] = await Promise.all([
+    read(db.from('items').select('*').order('code')),
+    read(db.from('suppliers').select('*').order('name')),
+  ]);
+  return { items,suppliers };
+}
+
+async function purchases(db) {
+  const [orders, masters] = await Promise.all([
+    read(db.from('purchase_orders').select('id,po_number,created_at,suppliers(id,name,contact),service_tickets(ticket_number),purchase_lines(*),supplier_bills(*,payments(amount,method,reference,paid_at))').order('created_at',{ascending:false})),
+    catalog(db),
+  ]);
+  return { orders,...masters };
+}
+
+async function billing(db) {
+  const [completed,invoices] = await Promise.all([
+    read(db.from('service_tickets').select('id,ticket_number,customer_name,created_at,invoices!left(id)').eq('status','Repair Complete').is('invoices',null).order('created_at',{ascending:false})),
+    read(db.from('invoices').select('*,service_tickets(ticket_number,mobile),payments(amount,method,reference,paid_at)').order('issued_on',{ascending:false}).order('id')),
+  ]);
+  return { completed,invoices };
+}
+
+export default async function handler(req,res) {
+  res.setHeader('Cache-Control','no-store');
+  const bridge = req.headers.origin === process.env.PUBLIC_PORTAL_ORIGIN && Boolean(process.env.PUBLIC_PORTAL_ORIGIN);
+  try {
+    if (req.method !== 'POST' && req.method !== 'OPTIONS') throw new HttpError(405,'Use POST');
+    if (req.method === 'OPTIONS') {
+      if (bridge) {
+        res.setHeader('Access-Control-Allow-Origin',req.headers.origin);
+        res.setHeader('Access-Control-Allow-Methods','POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers','Content-Type');
+        res.setHeader('Vary','Origin');
+      }
+      return res.status(204).end();
+    }
+    let body;
+    try {
+      if (Number(req.headers['content-length']) > 32768 || (typeof req.body === 'string' && req.body.length > 32768)) throw new Error();
+      body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+      if (!body || typeof body.action !== 'string' || JSON.stringify(body).length > 32768 || !body.input ||
+          typeof body.input !== 'object' || Array.isArray(body.input)) throw new Error();
+    } catch { throw new HttpError(400,'Invalid request'); }
+    const { action,input } = body;
+    if (bridge && ['submit','track'].includes(action)) {
+      res.setHeader('Access-Control-Allow-Origin',req.headers.origin);
+      res.setHeader('Vary','Origin');
+    }
+    const result = publicActions.includes(action) ? await publicAction(action,req,input) : await staffAction(action,req,input);
+    return res.status(200).json({ok:true,result});
+  } catch (error) {
+    if (!(error instanceof HttpError)) console.error('Service operation failed', error.name);
+    return res.status(error.status || 500).json({ok:false,error:error.status ? error.message : 'Could not complete the request'});
+  }
+}
