@@ -20,7 +20,8 @@ const localityOptions = ['Bhagwanpur','Godhanpur','Bhatti Road','Pratappur Naka'
 const pages = { tickets:'Service tickets',catalog:'Items and suppliers',purchases:'Purchasing',billing:'Billing' };
 const originalTicket = new URL(location.href).searchParams.get('ticket') || '';
 let filter = /^[1-9][0-9]{4}$/.test(originalTicket) ? originalTicket : '';
-let openOnly = !filter;
+let ticketScope = filter ? 'all' : 'open';
+const ticketStatuses = ['New','Assigned','In Progress','Awaiting Parts','Repair Complete'];
 let offset = 0;
 let user, refresh, page = 'tickets', pageGeneration = 0, noticeTimer;
 let session;
@@ -108,7 +109,7 @@ async function load() {
   const selectedPage = page;
   try {
     const data = await request(selectedPage === 'tickets' ? 'dashboard' : selectedPage,
-      selectedPage === 'tickets' ? { offset, openOnly, ticket:filter } : {});
+      selectedPage === 'tickets' ? { offset, openOnly:ticketScope === 'open', status:ticketStatuses.includes(ticketScope) ? ticketScope : undefined, ticket:filter } : {});
     if (generation !== pageGeneration) return;
     if (selectedPage === 'tickets') user = data.staff;
     $('staff-name').textContent = user.name;
@@ -152,25 +153,34 @@ function renderTickets({tickets,technicians,pushKey,limit}) {
   const repairStatuses = { Assigned:['In Progress','Awaiting Parts','Repair Complete'], 'In Progress':['Awaiting Parts','Repair Complete'], 'Awaiting Parts':['In Progress','Repair Complete'] };
   $('content').innerHTML = '<form id="ticket-filter" class="inline-form">' +
     input('Ticket number','ticket','inputmode="numeric" pattern="[1-9][0-9]{4}" maxlength="5" value="'+e(filter)+'"') +
-    select('View','scope',[['open','Open'],['all','All']],openOnly ? 'open':'all') + submitButton('Search') + btn('Refresh','refresh-tickets',true) + '</form>' +
+    select('Status','scope',[['open','Open tickets'],['all','All statuses'],...ticketStatuses],ticketScope) + submitButton('Search') + btn('Refresh','refresh-tickets',true) + '</form>' +
     (tickets.length ? '<div class="list">'+tickets.map(t => {
       const actions = [];
       if (user.role === 'manager' && t.status !== 'Repair Complete') {
         actions.push('<form data-assign="'+e(t.id)+'">'+select('Technician','technician_id',technicianOptions,t.assigned_to).replace(' required','')+submitButton('Save assignment')+'</form>');
+      }
+      const awaitingParts = t.status === 'Awaiting Parts';
+      if (user.role === 'manager' && awaitingParts) {
+        actions.push('<button type="button" class="secondary" data-ticket-po="'+e(t.id)+'">Create PO</button>');
       }
       if (user.role === 'technician' && repairStatuses[t.status]) {
         actions.push('<button data-parts="'+e(t.id)+'" class="secondary">'+(t.parts_reviewed?'Edit parts used':'Record parts used')+'</button>');
         const statuses = repairStatuses[t.status].filter(s => s !== 'Repair Complete' || t.parts_reviewed);
         actions.push('<form data-status="'+e(t.id)+'">'+select('Progress','status',statuses)+submitButton('Update')+'</form>');
       }
-      return '<article class="panel"><div class="section-title"><h2>#'+t.ticket_number+' · '+e(t.appliance)+'</h2><span class="badge">'+e(t.status)+'</span></div>'+
+      return '<article class="panel"'+(awaitingParts?' style="background:#fff1f2;border-color:#fca5a5"':'')+'><div class="section-title"><h2>#'+t.ticket_number+' · '+e(t.appliance)+'</h2><span class="badge"'+(awaitingParts?' style="'+lightRedAlert+'"':'')+'>'+e(t.status)+'</span></div>'+
         '<p>'+e(t.customer_name)+' · <a href="tel:+91'+e(t.mobile)+'">'+e(t.mobile)+'</a></p><p>'+e(t.issue)+'</p>'+
         '<p class="meta">'+[t.brand,t.service_type,t.intake_source,date(t.created_at)].map(e).join(' · ')+'</p>'+
         '<a href="'+e(mapsLink(t))+'" target="_blank" rel="noopener noreferrer">'+e(t.service_address)+', '+e(t.locality)+'</a>'+
         '<div class="card-actions">'+actions.join('')+'</div></article>';
     }).join('')+'</div>' : '<p class="panel muted">No tickets match this view.</p>') +
     '<div class="actions">'+(offset ? btn('Previous','page-prev',true) : '')+(tickets.length === limit ? btn('Next','page-next',true) : '')+'</div>';
-  submit($('ticket-filter'),async data => {filter = data.ticket;openOnly = data.scope === 'open' && !filter;offset = 0;await load();});
+  submit($('ticket-filter'),async data => {
+    filter = data.ticket;
+    ticketScope = filter && data.scope === 'open' ? 'all' : data.scope;
+    offset = 0;
+    await load();
+  });
   $('refresh-tickets').onclick = load;
   if ($('page-prev')) $('page-prev').onclick = () => { offset -= limit; load(); };
   if ($('page-next')) $('page-next').onclick = () => { offset += limit; load(); };
@@ -183,6 +193,16 @@ function renderTickets({tickets,technicians,pushKey,limit}) {
     await request('status',{ id:form.dataset.status,status:data.status });
     notice('Progress updated'); await load();
   }));
+  for (const button of $('content').querySelectorAll('[data-ticket-po]')) button.onclick = async () => {
+    const ticket = tickets.find(t => t.id === button.dataset.ticketPo);
+    button.disabled = true;
+    try {
+      const catalog = await request('catalog');
+      if (button.isConnected && !$('dialog').open) openPurchaseForm(catalog,ticket);
+    } catch (error) {
+      notice(error.message);
+    } finally { button.disabled = false; }
+  };
   $('content').querySelectorAll('[data-parts]').forEach(button => { button.onclick = async () => {
     try {
       const {items,parts} = await request('parts',{id:button.dataset.parts});
@@ -432,15 +452,19 @@ function renderCatalog({items,suppliers}) {
     input('Address','address')+input('GSTIN','gstin'),'Save supplier',data=>request('supplier',data));
 }
 
+function openPurchaseForm({items,suppliers}, ticket = null) {
+  if (!items.some(i=>i.active)) { notice('Add a part in the item master first'); return; }
+  if (!suppliers.length) { notice('Add a supplier before creating a purchase order'); return; }
+  const title = ticket ? 'New purchase order · Ticket #'+ticket.ticket_number : 'New purchase order';
+  editableLines(title,items,[],true,async (lines,data) => {
+    const response = await request('po',{supplier_id:data.supplier_id,ticket_id:ticket?.id ?? null,lines});
+    return 'Purchase order #'+response.po_number+' created';
+  },select('Supplier','supplier_id',suppliers.map(s=>[s.id,s.name])));
+}
+
 function renderPurchases({orders,items,suppliers}) {
   $('page-actions').innerHTML = btn('New purchase order','new-po');
-  $('new-po').onclick = () => {
-    if (!items.some(i=>i.active)) { notice('Add a part in the item master first'); return; }
-    editableLines('New purchase order',items,[],true,async (lines,data) => {
-      const response = await request('po',{supplier_id:data.supplier_id,ticket_id:null,lines});
-      return 'Purchase order #'+response.po_number+' created';
-    },select('Supplier','supplier_id',suppliers.map(s=>[s.id,s.name])));
-  };
+  $('new-po').onclick = () => openPurchaseForm({items,suppliers});
   const shareOrder = order => {
     const number = String(order.suppliers.contact || '').replace(/[^0-9]/g,'');
     const phone = /^[6-9][0-9]{9}$/.test(number) ? '91' + number : /^91[6-9][0-9]{9}$/.test(number) ? number : '';
@@ -458,6 +482,7 @@ function renderPurchases({orders,items,suppliers}) {
       return '<p><strong>'+e(s.name)+'</strong> · Paid '+money(paid)+' · Outstanding '+money(due)+'</p>';
     }).join('')+'</section>'+
     (orders.length ? orders.map(order => '<article class="panel"><div class="section-title"><h2>PO #'+order.po_number+' · '+e(order.suppliers.name)+'</h2><button class="secondary" data-po-print="'+e(order.id)+'">Print / PDF</button></div>'+
+      (order.service_tickets ? '<p class="meta">Linked ticket #'+e(order.service_tickets.ticket_number)+'</p>' : '')+
       '<div class="table-wrap"><table><thead><tr><th>Part</th><th>Ordered</th><th>Received</th><th>Unit price</th><th></th></tr></thead><tbody>'+
       order.purchase_lines.map(line=>'<tr><td>'+e(line.description)+'</td><td>'+e(line.quantity)+' '+e(line.uom)+'</td><td>'+e(line.received)+'</td><td>'+money(line.unit_price)+'</td><td>'+
         (Number(line.received)<Number(line.quantity)?'<button class="secondary" data-receive="'+e(line.id)+'">Receive</button>':'')+'</td></tr>').join('')+
