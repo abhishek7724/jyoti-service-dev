@@ -8,6 +8,16 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon-192.png">
 <link rel="stylesheet" href="/staff.css">
+<style>
+#login-form input {
+  color-scheme: light;
+  color: #142a4a;
+  -webkit-text-fill-color: #142a4a;
+  caret-color: #142a4a;
+  background-color: #fff;
+  font-size: 16px;
+}
+</style>
 <script type="module" src="/staff.js"></script>
 </head>
 <body>
@@ -16,8 +26,8 @@
 <section id="sign-in" class="panel narrow">
 <h1>Staff sign in</h1>
 <form id="login-form" class="grid">
-<label>Username<input name="username" required autocomplete="username"></label>
-<label>Password<input name="password" type="password" required autocomplete="current-password"></label>
+<label>Username<input name="username" type="text" required autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" enterkeyhint="next"></label>
+<label>Password<input name="password" type="password" required autocomplete="current-password" enterkeyhint="go"></label>
 <button>Sign in</button>
 </form>
 </section>
