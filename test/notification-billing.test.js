@@ -26,7 +26,7 @@ test('assignment opens the exact ticket in a new app window', async () => {
 
 test('assignment focuses and navigates an existing uncontrolled app window', async () => {
   let navigated;
-  const client = {url:'https://jyoti.example/staff',focus:async()=>client,
+  const client = {url:'https://jyoti.example/staff?ticket=10002',focus:async()=>client,
     navigate:async url=>{navigated=url;return client;}};
   await tap({matchAll:async options=>{
     assert.equal(options.includeUncontrolled,true);

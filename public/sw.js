@@ -22,7 +22,6 @@ self.addEventListener('notificationclick', event => {
     if (staff) {
       try {
         const focused = await staff.focus();
-        if (focused.url === url.href) return focused;
         const navigated = await focused.navigate(url.href);
         if (navigated) return navigated;
       } catch {
