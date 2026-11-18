@@ -150,7 +150,7 @@ document.querySelectorAll('[data-intake]').forEach(link => link.addEventListener
 async function request(action, input) {
   const response = await fetch('/api/service', {
     method: 'POST',
-    credentials: 'omit',
+    credentials: 'same-origin',
     headers: {'Content-Type': 'text/plain;charset=UTF-8'},
     body: JSON.stringify({action, input})
   });
