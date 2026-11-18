@@ -407,13 +407,14 @@ function showTechnicianOnboarding(key) {
 function editableLines(title,items,existing,priced,save,fields = '',label = priced ? 'Create purchase order' : 'Save parts used') {
   const byId = new Map(items.map(i => [i.id,i]));
   const form = modal(title,fields+'<div id="lines"></div>'+
-    btn('Add line','add-line',true)+(!priced ? '<p class="meta">Save with no lines to confirm no parts were used.</p>' : ''),
+    btn('Add line','add-line',true)+(!priced ? '<p class="meta">Add at least one item and its quantity before completing the repair.</p>' : ''),
     label, (data) => {
       const lines = [...$('lines').children].map(row => ({
         item_id:row.querySelector('select').value,
         quantity:Number(row.querySelector('[name="quantity"]').value),
         ...(priced ? {unit_price:Number(row.querySelector('[name="unit_price"]').value)} : {}),
       }));
+      if (!lines.length) throw new Error(priced ? 'Add at least one purchase order line' : 'Add at least one item in Parts used');
       return save(lines,data);
     });
   function addLine(line = {}) {
@@ -431,7 +432,7 @@ function editableLines(title,items,existing,priced,save,fields = '',label = pric
   }
   form.querySelector('#add-line').onclick = () => addLine();
   for (const line of existing) addLine(line);
-  if (priced && !existing.length) addLine();
+  if (!existing.length) addLine();
 }
 
 const payable = (row) => Math.round((Number(row.total ?? row.amount) - (row.payments || []).reduce((sum,p)=>sum+Number(p.amount),0))*100)/100;
