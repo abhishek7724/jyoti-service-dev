@@ -352,9 +352,6 @@ function renderTicketDetail(data) {
   $('page-title').textContent='Ticket #'+t.ticket_number;
   $('page-actions').innerHTML=btn('Back to tickets','back-tickets',true);
   $('back-tickets').onclick=()=>{detailTicketId=null;pendingTicketNumber='';history.replaceState(null,'','/staff');load();};
-  const customerUrl=new URL('/',location.origin);
-  customerUrl.search=new URLSearchParams({view:'track',ticket:t.ticket_number,access:t.customer_view_key}).toString();
-  customerUrl.hash='complaints';
   const detail=(label,value)=>'<div><dt>'+label+'</dt><dd>'+e(value || '—')+'</dd></div>';
   let sections='';
   if(inspecting || inspected)sections+='<section class="panel"><h2>Inspection'+(inspecting ? ' in progress' : ' complete')+'</h2>'+
@@ -363,9 +360,8 @@ function renderTicketDetail(data) {
   if(complete)sections+='<section class="panel"><h2>Repair completion</h2><p class="preserve-lines">'+e(t.completion_notes || 'Repair completed.')+'</p>'+
     (data.parts.length ? '<h3>Parts used</h3><ul>'+data.parts.map(part=>'<li>'+e(part.items?.description)+' · '+e(part.quantity)+' '+e(part.items?.uom)+'</li>').join('')+'</ul>' : '')+
     '<h3 class="section-gap">After photos <small class="meta">Optional</small></h3>'+photoGallery(data.media,'completion')+'</section>'+
-    '<section class="panel"><div class="section-title"><h2>Payments and billing</h2>'+(canCollect ? btn('Receive payment','receive-payment') : '')+'</div>'+financialSummary(data)+receiptHistory(data.payments,data.media)+'<div class="actions"><a class="action-link" href="'+e(customerUrl.href)+'" target="_blank" rel="noopener noreferrer">Customer view</a>'+btn('Copy customer link','copy-customer-link',true)+'</div><p class="meta section-gap">The customer needs this private link and their registered mobile number to view photos and receipts.</p></section>';
+    '<section class="panel"><div class="section-title"><h2>Payments and billing</h2>'+(canCollect ? btn('Receive payment','receive-payment') : '')+'</div>'+financialSummary(data)+receiptHistory(data.payments,data.media)+'</section>';
   $('content').innerHTML='<section class="panel"><div class="section-title"><h2>'+e(t.appliance)+' · '+e(t.brand)+'</h2>'+statusBadge(t.status)+'</div><p>'+e(t.customer_name)+'</p><p class="preserve-lines">'+e(t.issue)+'</p><div class="actions"><a class="action-link" href="tel:+91'+e(t.mobile)+'">Call '+e(t.mobile)+'</a><a class="action-link" target="_blank" rel="noopener noreferrer" href="'+e(mapsLink(t))+'">Directions</a></div><dl class="ticket-facts">'+detail('Service address',[t.service_address,t.locality,t.city].filter(Boolean).join(', '))+detail('Service type',t.service_type)+detail('Source',t.intake_source)+detail('Created',date(t.created_at))+'</dl>'+requiredPartsSummary(data.requiredParts,t.status)+rejectionMessage(t)+'<div class="actions" id="repair-actions"></div></section>'+sections;
-  if($('copy-customer-link'))$('copy-customer-link').onclick=async()=>{try{await navigator.clipboard.writeText(customerUrl.href);notice('Customer link copied');}catch{notice('Open Customer view and copy its address to share the private link.');}};
   if(canCollect)$('receive-payment').onclick=()=>receivePaymentModal(data);
   if(user.role === 'manager' && t.status === 'Assignment Rejected'){
     $('repair-actions').innerHTML=btn('Reassign technician','reassign-ticket');
@@ -867,6 +863,38 @@ function updateInvoiceDraft(form, parts) {
     (value.validity.valid ? '<p><strong>Amount payable '+money((gross-discount)/100)+'</strong></p>' : '');
 }
 
+function editIssuedInvoice(bill){
+  const fields=input('Customer name','customer_name','required maxlength="100" value="'+e(bill.customer_name)+'"')+
+    '<label>Bill To / Ship To address<textarea name="service_address" required maxlength="1000" rows="3">'+e(bill.service_address)+'</textarea></label>'+
+    input('Customer GSTIN (optional)','gstin','maxlength="15" value="'+e(bill.customer_gstin || '')+'"')+
+    bill.lines.map((line,index)=>'<section class="invoice-edit-line"><strong>'+e(line.description)+'</strong><p class="meta">'+e(line.quantity)+' '+e(line.uom)+'</p><div class="pair">'+
+      input('Unit price (₹)','price-'+index,'type="number" min="0" max="9999999" step="0.01" required value="'+e(line.unit_price)+'"')+
+      input('Tax rate %','rate-'+index,'type="number" min="0" max="100" step="0.01" required value="'+e(line.tax_rate)+'"')+'</div></section>').join('')+
+    '<div class="pair">'+select('Discount','discount_type',[['none','No discount'],['percent','Percentage (%)'],['fixed','Fixed amount (₹)']],Number(bill.discount_amount)>0?'fixed':'none')+
+    input('Discount value','discount_value','type="number" min="0" step="0.01" value="'+e(bill.discount_amount || 0)+'"')+'</div><div data-revision-summary aria-live="polite"></div>'+
+    '<label>Correction note (optional)<textarea name="note" maxlength="500" rows="2"></textarea></label><p class="meta">The invoice number stays the same. Saving updates the printable invoice; a WhatsApp copy already sent will not change.</p>';
+  const form=modal('Edit invoice '+bill.number,fields,'Save correction',async values=>{
+    const updated=await request('reviseInvoice',{invoice_id:bill.id,revision:bill.revision || 1,customer_name:values.customer_name,service_address:values.service_address,gstin:values.gstin,
+      prices:bill.lines.map((line,index)=>({line_index:index,unit_price:Number(values['price-'+index]),tax_rate:Number(values['rate-'+index])})),
+      discount_type:values.discount_type,discount_value:Number(values.discount_value || 0),note:values.note});
+    return 'Invoice '+updated.number+' corrected';
+  });
+  const update=()=>{
+    const fields=form.elements,type=fields.discount_type.value,value=fields.discount_value;
+    value.disabled=type==='none';value.required=!value.disabled;
+    const gross=bill.lines.reduce((sum,line,index)=>{
+      const base=Math.round(Number(fields['price-'+index].value)*100*Math.round(Number(line.quantity)*1000)/1000);
+      return sum+base+2*Math.round(base*Math.round(Number(fields['rate-'+index].value)*100)/20000);
+    },0);
+    const entered=Math.round(Number(value.value)*100),discount=type==='none'?0:type==='fixed'?entered:Math.round(gross*entered/10000);
+    value.max=type==='percent'?'100':String(gross/100);
+    const percent=type==='percent'?Number(value.value):gross?discount/gross*100:0;
+    form.querySelector('[data-revision-summary]').innerHTML='<p>Total before discount '+money(gross/100)+'</p>'+(type==='none'?'':'<p>Discount ('+percent.toFixed(2)+'%) −'+money(discount/100)+'</p>')+(value.validity.valid?'<p><strong>Amount payable '+money((gross-discount)/100)+'</strong></p>':'');
+    markRequiredFields(form);
+  };
+  form.addEventListener('input',update);form.addEventListener('change',update);update();
+}
+
 function renderBilling({completed,invoices}) {
   $('content').innerHTML = '<section class="panel"><h2>Ready to bill</h2>'+
     (completed.length ? completed.map(t=>'<div class="card-actions"><strong>#'+t.ticket_number+' · '+e(t.customer_name)+'</strong>'+((t.payments || []).length ? '<span class="badge status-unbilled">Received '+money(t.payments.reduce((sum,p)=>sum+Number(p.amount),0))+'</span>' : '')+'<button data-draft="'+e(t.id)+'">Review invoice</button></div>').join('') :
@@ -880,6 +908,7 @@ function renderBilling({completed,invoices}) {
       return '<div class="card-actions"><strong>'+e(b.number)+' · '+e(b.customer_name)+'</strong><span class="badge">'+state+'</span> '+'<span>Total '+money(b.total)+' · Received '+money(received)+' · Remaining '+money(due)+'</span>'+
         (excess > 0 ? '<span class="excess-payment">Excess '+money(excess)+' · refund or credit required</span>' : '')+
         '<button class="secondary" data-invoice-print="'+e(b.id)+'">Print / PDF</button>'+
+        (!(b.payments || []).length ? '<button type="button" class="secondary icon-button" data-invoice-edit="'+e(b.id)+'" aria-label="Edit invoice '+e(b.number)+'" title="Edit invoice"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M16 3l5 5-12 12H4v-5zM14 5l5 5"/></svg></button>' : '')+
         (due>0?'<button data-invoice-pay="'+e(b.id)+'">Record payment</button>' +
           (b.service_tickets?.mobile ? '<a href="tel:+91'+e(b.service_tickets.mobile)+'">Call customer</a>' : '') : '')+'</div>';
     }).join('') : '<p class="muted">No invoices issued yet.</p>')+'</section>';
@@ -913,6 +942,7 @@ function renderBilling({completed,invoices}) {
     } catch (error) { notice(error.message); }
     finally { button.disabled = false; button.textContent = 'Review invoice'; }
   };
+  for (const button of $('content').querySelectorAll('[data-invoice-edit]'))button.onclick=()=>editIssuedInvoice(invoices.find(b=>b.id===button.dataset.invoiceEdit));
   for (const button of $('content').querySelectorAll('[data-invoice-print]')) button.onclick = () => printInvoice(invoices.find(b=>b.id===button.dataset.invoicePrint));
   for (const button of $('content').querySelectorAll('[data-invoice-pay]')) button.onclick = async () => {
     button.disabled=true;

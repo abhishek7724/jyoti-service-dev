@@ -319,6 +319,11 @@ async function staffAction(action, req, input) {
         p_prices:data.prices,p_discount_type:data.discount_type,p_discount_value:data.discount_value,
       }));
     }
+    case 'reviseInvoice':{
+      const data=parse(forms.invoiceRevision,input);
+      return read(db.rpc('revise_unpaid_invoice',{p_invoice:data.invoice_id,p_user:staff.user_id,p_revision:data.revision,p_name:data.customer_name,p_address:data.service_address,p_gstin:data.gstin,
+        p_prices:data.prices,p_discount_type:data.discount_type,p_discount_value:data.discount_value,p_note:data.note}));
+    }
     case 'payment': {
       const p = parse(forms.payment,input);
       if(p.invoice_id)throw new HttpError(422,'Open Receive payment on the ticket to record a customer payment with its acknowledgement or UPI proof');

@@ -149,13 +149,6 @@ form.addEventListener('submit', event => {
   send.textContent = 'Submitting…';
   request('submit', {...Object.fromEntries(new FormData(form)), key}).then(result => {
     document.getElementById('ticket').textContent = result.ticket;
-    if(result.access){
-      customerAccess=result.access;customerTicket=String(result.ticket);
-      const link=document.createElement('a');
-      link.href='/?'+new URLSearchParams({view:'track',ticket:result.ticket,access:result.access})+'#complaints';
-      link.textContent='Open your private ticket and payment history';
-      document.getElementById('confirmation').append(link);
-    }
     trackForm.elements.ticket.value = result.ticket;
     trackForm.elements.mobile.value = form.elements.mobile.value;
     form.hidden = true;
