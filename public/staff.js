@@ -21,7 +21,7 @@ const pages = { tickets:'Service tickets',catalog:'Items and suppliers',purchase
 const originalTicket = new URL(location.href).searchParams.get('ticket') || '';
 let filter = /^[1-9][0-9]{4}$/.test(originalTicket) ? originalTicket : '';
 let ticketScope = filter ? 'all' : 'open';
-const ticketStatuses = ['New','Assigned','In Progress','Awaiting Parts','Repair Complete'];
+const ticketStatuses = ['New','Assigned','In Progress','Awaiting Parts','Repair Complete','Billed','Paid'];
 let offset = 0;
 let user, refresh, page = 'tickets', pageGeneration = 0, noticeTimer;
 let session;
@@ -112,8 +112,11 @@ function numberFields(data, ...names) {
 async function load() {
   const generation = ++pageGeneration;
   const selectedPage = page;
-  $('boot-status').textContent = 'Loading '+pages[selectedPage].toLowerCase()+'…';
-  $('boot-status').hidden = false;
+  const initialLoad = $('desk').hidden;
+  if (initialLoad) {
+    $('boot-status').textContent = 'Loading service tickets…';
+    $('boot-status').hidden = false;
+  }
   try {
     const data = await request(selectedPage === 'tickets' ? 'dashboard' : selectedPage,
       selectedPage === 'tickets' ? { offset, openOnly:ticketScope === 'open', status:ticketStatuses.includes(ticketScope) ? ticketScope : undefined, ticket:filter } : {});
@@ -169,7 +172,7 @@ function renderTickets({tickets,technicians,pushKey,limit}) {
     select('Status','scope',[['open','Open tickets'],['all','All statuses'],...ticketStatuses],ticketScope) + submitButton('Search') + btn('Refresh','refresh-tickets',true) + '</form>' +
     (tickets.length ? '<div class="list">'+tickets.map(t => {
       const actions = [];
-      if (user.role === 'manager' && t.status !== 'Repair Complete') {
+      if (user.role === 'manager' && !['Repair Complete','Billed','Paid'].includes(t.status)) {
         actions.push('<form data-assign="'+e(t.id)+'">'+select('Technician','technician_id',technicianOptions,t.assigned_to).replace(' required','')+submitButton('Save assignment')+'</form>');
       }
       const awaitingParts = t.status === 'Awaiting Parts';

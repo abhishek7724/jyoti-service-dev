@@ -142,12 +142,12 @@ async function staffAction(action, req, input) {
     const offset = Number.isInteger(input.offset) && input.offset >= 0 && input.offset <= 15000 ? input.offset : 0;
     let query = userDb.from('service_tickets').select(fields).order('created_at', { ascending: false }).order('id').range(offset, offset + limit - 1);
     if (input.status !== undefined) {
-      if (!['New','Assigned','In Progress','Awaiting Parts','Repair Complete'].includes(input.status)) {
+      if (!['New','Assigned','In Progress','Awaiting Parts','Repair Complete','Billed','Paid'].includes(input.status)) {
         throw new HttpError(422, 'Choose a valid ticket status');
       }
       query = query.eq('status',input.status);
     } else if (input.openOnly === true) {
-      query = query.neq('status','Repair Complete');
+      query = query.in('status',['New','Assigned','In Progress','Awaiting Parts']);
     }
     if (input.ticket !== undefined && input.ticket !== '') {
       if (!/^[1-9][0-9]{4}$/.test(String(input.ticket))) throw new HttpError(422, 'Enter a five-digit ticket number');

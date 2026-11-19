@@ -78,3 +78,25 @@ test('payment precision, invoice words and push destination validation',() => {
   assert.equal(validatePushEndpoint('https://fcm.googleapis.com.example.invalid/'),false);
   assert.equal(validatePushEndpoint('https://fcm.googleapis.com:444/fcm/send/example'),false);
 });
+
+test('ticket dashboard filters Billed and Paid and keeps settled tickets out of Open tickets',async () => {
+  const queries = [];
+  globalThis.fetch = async (url) => {
+    const target = new URL(url);
+    if (target.pathname === '/auth/v1/user') return Response.json({id:key});
+    if (target.pathname === '/rest/v1/staff') {
+      return Response.json(target.searchParams.get('select').includes('role')
+        ? [{user_id:key,name:'Test Manager',role:'manager'}] : []);
+    }
+    assert.equal(target.pathname,'/rest/v1/service_tickets');
+    queries.push(target.searchParams);
+    return Response.json([]);
+  };
+  for (const status of ['Billed','Paid']) {
+    const result = await request('dashboard',{status},{authorization:'Bearer test-token'});
+    assert.equal(result.status,200);
+    assert.equal(queries.at(-1).get('status'),'eq.'+status);
+  }
+  assert.equal((await request('dashboard',{openOnly:true},{authorization:'Bearer test-token'})).status,200);
+  assert.equal(queries.at(-1).get('status'),'in.(New,Assigned,In Progress,Awaiting Parts)');
+});
