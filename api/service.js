@@ -188,13 +188,27 @@ async function staffAction(action, req, input) {
     return createMediaUpload(context,data);
   }
   if (action === 'mediaReady') return finalizeMedia(context,parse(forms.mediaReady,input));
+  if(action === 'staff'){
+    requireRole(staff,'manager');
+    const limit=50,offset=input.offset ?? 0;
+    if(!Number.isSafeInteger(offset) || offset<0 || offset>1000000)throw new HttpError(422,'Choose a valid staff page');
+    if(input.search!==undefined && (typeof input.search!=='string' || input.search.length>100))throw new HttpError(422,'Search must contain at most 100 characters');
+    let query=db.from('staff').select('user_id,name,username,mobile_number,role,active',{count:'exact'}).order('name').order('user_id').range(offset,offset+limit-1);
+    const search=(input.search || '').trim();
+    if(search){const pattern=JSON.stringify('%'+search.replace(/[\\%_]/g,character=>'\\'+character)+'%');query=query.or(['name','username','mobile_number'].map(column=>column+'.ilike.'+pattern).join(','));}
+    const result=await query;return {staff:await read(result),total:result.count ?? 0,offset,limit};
+  }
+  if(action === 'updateStaff'){
+    requireRole(staff,'manager');const data=parse(forms.staffProfile,input);
+    await read(db.rpc('update_staff_profile',{p_actor:staff.user_id,p_user:data.user_id,p_name:data.name,p_mobile:data.mobile_number,p_role:data.role}));return {saved:true};
+  }
   if (action === 'createStaff') {
     requireRole(staff, 'manager');
-    const { username, password, name, role } = parse(forms.staff, input);
+    const { username, password, name, role,mobile_number } = parse(forms.staff, input);
     const { data, error } = await db.auth.admin.createUser({ email: staffEmail(username), password, email_confirm: true });
     if (error || !data.user) throw new HttpError(error?.status === 422 ? 409 : 422, error?.status === 422 ? 'That username may already be in use' : 'Staff account could not be created');
     try {
-      await read(db.from('staff').insert({ user_id: data.user.id, name, role }));
+      await read(db.from('staff').insert({ user_id: data.user.id, name, role,username,mobile_number }));
     } catch (failure) {
       const cleanup = await db.auth.admin.deleteUser(data.user.id);
       if (cleanup.error) console.error('Staff onboarding cleanup failed', data.user.id);
