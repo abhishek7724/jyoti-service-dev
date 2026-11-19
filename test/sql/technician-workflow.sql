@@ -46,7 +46,7 @@ begin
  exception when raise_exception then if sqlerrm<>'Complete the inspection before completing the repair' then raise;end if;end;
  perform public.advance_ticket_inspection(ticket,technician,'complete','Checked compressor');
  if not exists(select 1 from public.service_tickets where id=ticket and status='Inspection Complete' and inspection_completed_at is not null)then raise exception 'Inspection milestone missing';end if;
- update public.service_tickets set status='Awaiting Parts' where id=ticket;
+ perform public.set_ticket_awaiting_parts(ticket,technician,inputs);
  perform public.complete_service_ticket(ticket,technician,inputs,'Replaced compressor','');
  perform public.complete_service_ticket(ticket,technician,inputs,'Replaced compressor','');
  if not exists(select 1 from public.service_tickets where id=ticket and status='Repair Complete' and completed_at is not null)then raise exception 'Completion did not save review';end if;

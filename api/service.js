@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto';
-import { sendNotification } from 'web-push';
+import { sendAssignmentAlerts } from '../lib/push.js';
 import { HttpError, clients, read, requireRole, staffSession } from '../lib/db.js';
 import { forms, mobile, staffEmail, ticket, uuid, validatePushEndpoint } from '../lib/validation.js';
 
@@ -105,29 +105,6 @@ async function publicAction(action, req, input) {
   return {ticket:result.ticket_number,access:result.customer_view_key};
 }
 
-async function notify(db, assignee, ticketNumber) {
-  const { WEB_PUSH_PUBLIC_KEY: publicKey, WEB_PUSH_PRIVATE_KEY: privateKey, WEB_PUSH_SUBJECT: subject } = process.env;
-  if (!publicKey || !privateKey || !subject) return 'Push is not configured';
-  const subscriptions = await read(db.from('push_subscriptions').select('endpoint,subscription').eq('user_id', assignee));
-  if (!subscriptions.length) return 'Technician has no notification subscription';
-  let delivered = 0;
-  await Promise.all(subscriptions.map(async ({ endpoint, subscription }) => {
-    if (!validatePushEndpoint(endpoint)) return;
-    try {
-      await sendNotification(subscription, JSON.stringify({
-        title: 'Ticket #' + ticketNumber + ' assigned',
-        body: 'Ticket #' + ticketNumber + ' has been assigned to you.',
-        ticketNumber,
-      }), { vapidDetails: { subject, publicKey, privateKey }, timeout: 4000, TTL: 3600 });
-      delivered++;
-    } catch (error) {
-      if ([404, 410].includes(error.statusCode)) {
-        await db.from('push_subscriptions').delete().eq('endpoint', endpoint).eq('user_id', assignee);
-      }
-    }
-  }));
-  return delivered ? 'Push accepted by notification service' : 'Push could not be delivered';
-}
 
 function issuerDetails() {
   let issuer;
@@ -166,6 +143,11 @@ async function staffAction(action, req, input) {
       read(query),
       staff.role === 'manager' ? read(userDb.from('staff').select('user_id,name').eq('role','technician').eq('active',true).order('name')) : [],
     ]);
+    const waiting=tickets.filter(ticket=>ticket.status === 'Awaiting Parts');
+    if(waiting.length){
+      const required=await read(db.from('ticket_required_parts').select('ticket_id,item_id,quantity,items(code,description,uom)').in('ticket_id',waiting.map(ticket=>ticket.id)));
+      for(const ticket of waiting)ticket.ticket_required_parts=required.filter(part=>part.ticket_id===ticket.id);
+    }
     return { staff, tickets, technicians, limit, pushKey: staff.role === 'technician' && process.env.WEB_PUSH_PRIVATE_KEY && process.env.WEB_PUSH_SUBJECT ? process.env.WEB_PUSH_PUBLIC_KEY || '' : '' };
   }
   if(action === 'technicians'){requireRole(staff,'manager');return read(userDb.from('staff').select('user_id,name').eq('role','technician').eq('active',true).order('name'));}
@@ -178,7 +160,11 @@ async function staffAction(action, req, input) {
   if (action === 'ticketDetail') {
     const id = parse(uuid,input.id);
     const ticket = await accessibleTicket(userDb,staff,id);
-    return {staff,ticket,...await ticketEvidence(db,id)};
+    return {staff,ticket,pushKey:staff.role === 'technician' ? process.env.WEB_PUSH_PUBLIC_KEY || '' : '',requiredParts:await read(db.from('ticket_required_parts').select('item_id,quantity,items(code,description,uom)').eq('ticket_id',id)),...await ticketEvidence(db,id)};
+  }
+  if(action === 'awaitingParts'){
+    requireRole(staff,'technician');const data=parse(forms.parts,input);
+    await read(db.rpc('set_ticket_awaiting_parts',{p_ticket:data.id,p_user:staff.user_id,p_parts:data.parts}));return {saved:true};
   }
   if (action === 'inspection') {
     requireRole(staff,'technician');
@@ -248,7 +234,7 @@ async function staffAction(action, req, input) {
     const updated = await read(userDb.from('service_tickets').update({ assigned_to: technician_id }).eq('id',id).select('status,ticket_number').single());
     let notification = '';
     if (technician_id && previous.assigned_to !== technician_id) {
-      try { notification = await notify(db, technician_id, updated.ticket_number); }
+      try { notification = await sendAssignmentAlerts(db, technician_id, updated.ticket_number); }
       catch { notification = 'Ticket assigned. Push could not be delivered.'; }
     }
     return { ...updated, notification };
@@ -262,7 +248,7 @@ async function staffAction(action, req, input) {
     requireRole(staff,'technician');
     const subscription = parse(forms.subscription,input);
     if (!validatePushEndpoint(subscription.endpoint)) throw new HttpError(422,'This browser notification service is unsupported');
-    await read(db.from('push_subscriptions').upsert({ endpoint:subscription.endpoint,user_id:staff.user_id,subscription }));
+    await read(db.from('push_subscriptions').upsert({ endpoint:subscription.endpoint,user_id:staff.user_id,subscription,last_registered_at:new Date().toISOString(),last_error_code:null }));
     return { subscribed:true };
   }
   if (action === 'parts' || action === 'saveParts') {
@@ -273,11 +259,12 @@ async function staffAction(action, req, input) {
       const { parts } = parse(forms.parts,input);
       return read(db.rpc('save_ticket_parts',{ p_ticket:id,p_user:staff.user_id,p_parts:parts }));
     }
-    const [items,parts] = await Promise.all([
+    const [items,parts,required] = await Promise.all([
       read(db.from('items').select('id,code,description,uom,active').order('code')),
       read(db.from('ticket_parts').select('item_id,quantity').eq('ticket_id',id)),
+      read(db.from('ticket_required_parts').select('item_id,quantity').eq('ticket_id',id)),
     ]);
-    return { items,parts };
+    return { items,parts,required };
   }
   requireRole(staff,...financeRoles);
   switch (action) {

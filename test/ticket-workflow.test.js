@@ -153,3 +153,16 @@ test('live configuration exposes the publishable key, never the server key',asyn
  assert.deepEqual(result.body.result,{url:process.env.SUPABASE_URL,key:process.env.SUPABASE_PUBLISHABLE_KEY});
  assert.equal(result.body.result.secret,undefined);
 });
+
+test('awaiting parts records item and quantity under the signed-in technician',async()=>{
+ let rpc;
+ globalThis.fetch=async(url,init)=>{
+  const path=new URL(url).pathname;
+  if(path==='/auth/v1/user')return Response.json({id});
+  if(path==='/rest/v1/staff')return Response.json([{user_id:id,name:'Tech',role:'technician'}]);
+  assert.equal(path,'/rest/v1/rpc/set_ticket_awaiting_parts');rpc=JSON.parse(init.body);return Response.json(null);
+ };
+ assert.equal((await call('awaitingParts',{id:other,parts:[]},true)).code,422);
+ assert.equal((await call('awaitingParts',{id:other,parts:[{item_id:id,quantity:2}]},true)).code,200);
+ assert.equal(rpc.p_user,id);assert.equal(rpc.p_parts[0].quantity,2);
+});

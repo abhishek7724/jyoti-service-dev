@@ -165,7 +165,7 @@ async function load({silent=false}={}) {
   const selectedPage = page;
   const initialLoad = $('desk').hidden;
   if (initialLoad) {
-    $('boot-status').textContent = 'Loading service tickets…';
+    $('boot-status').innerHTML = '<span class="waiting-spinner" aria-hidden="true"></span><span class="sr-only">Please wait</span>';
     $('boot-status').hidden = false;
   }
   try {
@@ -176,7 +176,7 @@ async function load({silent=false}={}) {
     const view=JSON.stringify([selectedPage,detailTicketId,data]);
     if(silent && (liveRefreshBlocked(true) || view === lastRenderedView))return !liveRefreshBlocked(true);
     lastRenderedView=view;
-    if (selectedPage === 'tickets') user = data.staff;
+    if (selectedPage === 'tickets') {user = data.staff;if(data.pushKey)knownPushKey=data.pushKey;}
     if (selectedPage === 'tickets' && !detailTicketId && pendingTicketNumber) {
       const ticket = data.tickets.find(ticket=>String(ticket.ticket_number) === pendingTicketNumber);
       pendingTicketNumber = '';
@@ -204,14 +204,14 @@ async function load({silent=false}={}) {
     if (selectedPage === 'purchases') renderPurchases(data);
     if (selectedPage === 'billing') renderBilling(data);
     markRequiredFields($('content'));
-    ensureLiveUpdates();
+    ensureLiveUpdates();syncPushRegistration();
     return true;
   } catch (error) {
     if (generation !== pageGeneration || error.status === 401) return;
     if (!$('boot-status').hidden) {
       const retry = document.createElement('button');
       retry.textContent = 'Retry';
-      retry.onclick = () => { $('boot-status').textContent = 'Loading service tickets…'; load(); };
+      retry.onclick = () => { $('boot-status').innerHTML = '<span class="waiting-spinner" aria-hidden="true"></span><span class="sr-only">Please wait</span>';  load(); };
       $('boot-status').replaceChildren(error.message + ' ', retry);
     } else if(!silent)notice(error.message);
     if(silent && error.status === 404 && selectedPage === 'tickets' && detailTicketId){detailTicketId=null;pendingTicketNumber='';filter='';ticketScope='open';history.replaceState(null,'','/staff');return load({silent:true});}
@@ -233,7 +233,7 @@ document.addEventListener('input',event=>{
   const form=event.target.closest?.('#content form');
   if(form && !form.matches('[data-assign]'))form.dataset.dirty='true';
 });
-window.addEventListener('focus',()=>liveUpdates?.refresh());
+window.addEventListener('focus',()=>{liveUpdates?.refresh();syncPushRegistration();});
 window.addEventListener('online',()=>liveUpdates?.refresh());
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)liveUpdates?.refresh();});
 
@@ -272,7 +272,7 @@ function renderTickets({tickets,technicians,pushKey,limit}) {
       actions.push('<button type="button" class="secondary" data-ticket-detail="'+e(t.id)+'" data-ticket-number="'+t.ticket_number+'">View details</button>');
       return '<article class="panel ticket-card"'+(awaitingParts?' style="background:#fff1f2;border-color:#fca5a5"':'')+'><div class="section-title"><h2>#'+t.ticket_number+' · '+e(t.appliance)+'</h2>'+statusBadge(t.status)+'</div>'+
         '<p>'+e(t.brand)+' · '+e(t.customer_name)+'</p><p class="issue-preview">'+e(t.issue)+'</p>'+
-        '<p class="meta">'+e(t.locality)+'</p>'+rejectionMessage(t,technicians)+'<div class="card-actions"><a class="action-link" href="tel:+91'+e(t.mobile)+'">Call</a>'+actions.join('')+'</div></article>';
+        '<p class="meta">'+e(t.locality)+'</p>'+requiredPartsSummary(t.ticket_required_parts,t.status)+rejectionMessage(t,technicians)+'<div class="card-actions"><a class="action-link" href="tel:+91'+e(t.mobile)+'">Call</a>'+actions.join('')+'</div></article>';
     }).join('')+'</div>' : '<p class="panel muted">No tickets match this view.</p>') +
     '<div class="actions">'+(offset ? btn('Previous','page-prev',true) : '')+(tickets.length === limit ? btn('Next','page-next',true) : '')+'</div>';
   submit($('ticket-filter'),async data => {
@@ -363,7 +363,7 @@ function renderTicketDetail(data) {
     (data.parts.length ? '<h3>Parts used</h3><ul>'+data.parts.map(part=>'<li>'+e(part.items?.description)+' · '+e(part.quantity)+' '+e(part.items?.uom)+'</li>').join('')+'</ul>' : '')+
     '<h3 class="section-gap">After photos <small class="meta">Optional</small></h3>'+photoGallery(data.media,'completion')+'</section>'+
     '<section class="panel"><div class="section-title"><h2>Payments and billing</h2>'+(canCollect ? btn('Receive payment','receive-payment') : '')+'</div>'+financialSummary(data)+receiptHistory(data.payments,data.media)+'<div class="actions"><a class="action-link" href="'+e(customerUrl.href)+'" target="_blank" rel="noopener noreferrer">Customer view</a>'+btn('Copy customer link','copy-customer-link',true)+'</div><p class="meta section-gap">The customer needs this private link and their registered mobile number to view photos and receipts.</p></section>';
-  $('content').innerHTML='<section class="panel"><div class="section-title"><h2>'+e(t.appliance)+' · '+e(t.brand)+'</h2>'+statusBadge(t.status)+'</div><p>'+e(t.customer_name)+'</p><p class="preserve-lines">'+e(t.issue)+'</p><div class="actions"><a class="action-link" href="tel:+91'+e(t.mobile)+'">Call '+e(t.mobile)+'</a><a class="action-link" target="_blank" rel="noopener noreferrer" href="'+e(mapsLink(t))+'">Directions</a></div><dl class="ticket-facts">'+detail('Service address',[t.service_address,t.locality,t.city].filter(Boolean).join(', '))+detail('Service type',t.service_type)+detail('Source',t.intake_source)+detail('Created',date(t.created_at))+'</dl>'+rejectionMessage(t)+'<div class="actions" id="repair-actions"></div></section>'+sections;
+  $('content').innerHTML='<section class="panel"><div class="section-title"><h2>'+e(t.appliance)+' · '+e(t.brand)+'</h2>'+statusBadge(t.status)+'</div><p>'+e(t.customer_name)+'</p><p class="preserve-lines">'+e(t.issue)+'</p><div class="actions"><a class="action-link" href="tel:+91'+e(t.mobile)+'">Call '+e(t.mobile)+'</a><a class="action-link" target="_blank" rel="noopener noreferrer" href="'+e(mapsLink(t))+'">Directions</a></div><dl class="ticket-facts">'+detail('Service address',[t.service_address,t.locality,t.city].filter(Boolean).join(', '))+detail('Service type',t.service_type)+detail('Source',t.intake_source)+detail('Created',date(t.created_at))+'</dl>'+requiredPartsSummary(data.requiredParts,t.status)+rejectionMessage(t)+'<div class="actions" id="repair-actions"></div></section>'+sections;
   if($('copy-customer-link'))$('copy-customer-link').onclick=async()=>{try{await navigator.clipboard.writeText(customerUrl.href);notice('Customer link copied');}catch{notice('Open Customer view and copy its address to share the private link.');}};
   if(canCollect)$('receive-payment').onclick=()=>receivePaymentModal(data);
   if(user.role === 'manager' && t.status === 'Assignment Rejected'){
@@ -397,16 +397,29 @@ function renderTicketDetail(data) {
     submit(form,async values=>{await request('inspection',{id:t.id,step:form.dataset.step,notes:values.notes});notice(form.dataset.step === 'complete' ? 'Inspection completed' : 'Comments saved');await load();});
   }
   if(assigned && ['Inspection Complete','Awaiting Parts'].includes(t.status)){
-    $('repair-actions').innerHTML=(t.status === 'Inspection Complete' ? btn('Awaiting parts','change-progress',true) : '')+btn('Complete repair','complete-repair');
+    $('repair-actions').innerHTML=btn(t.status === 'Inspection Complete' ? 'Awaiting parts' : 'Edit awaited parts','change-progress',true)+btn('Complete repair','complete-repair');
     if($('change-progress'))$('change-progress').onclick=async event=>{
       const button=event.currentTarget;button.disabled=true;
-      try{await request('status',{id:t.id,status:'Awaiting Parts'});await load();}catch(error){notice(error.message);button.disabled=false;}
+      try{awaitedPartsModal(t,await request('parts',{id:t.id}));}catch(error){notice(error.message);}finally{button.disabled=false;}
     };
     $('complete-repair').onclick=async event=>{
       const button=event.currentTarget;button.disabled=true;
       try{const catalog=await request('parts',{id:t.id});completionReview(t,catalog,data.media);}catch(error){notice(error.message);}finally{button.disabled=false;}
     };
   }
+}
+
+function requiredPartsSummary(parts=[],status){
+  if(status !== 'Awaiting Parts' || !parts?.length)return '';
+  return '<div class="awaited-parts"><strong>Awaiting parts</strong><ul>'+parts.map(part=>'<li>'+e(part.items?.description || part.items?.code)+' · '+e(part.quantity)+' '+e(part.items?.uom || '')+'</li>').join('')+'</ul></div>';
+}
+function awaitedPartsModal(ticket,catalog){
+  if(!catalog.items.some(item=>item.active)){notice('Ask the manager to add the required parts to Item master first.');return;}
+  editableLines('Awaiting parts · #'+ticket.ticket_number,catalog.items,catalog.required || [],false,async parts=>{
+    await request('awaitingParts',{id:ticket.id,parts});return 'Awaited parts saved';
+  },'<p>Select the parts needed to continue the repair and their quantities.</p>','Save awaited parts',{
+    hint:'Record each required part and quantity. These are separate from Parts used at repair completion.',emptyMessage:'Select at least one awaited part and quantity'
+  });
 }
 
 function completionReview(ticket,catalog,media) {
@@ -525,13 +538,15 @@ function newStaff() {
     });
 }
 
-let pushRegistration;
+let pushRegistration,lastPushSync=0,knownPushKey='';
 async function subscribe(registration,key) {
+  const raw=atob(key.replace(/-/g,'+').replace(/_/g,'/').padEnd(Math.ceil(key.length/4)*4,'='));
+  const applicationServerKey=Uint8Array.from(raw,c=>c.charCodeAt(0));
   let subscription = await registration.pushManager.getSubscription();
-  if (!subscription) {
-    const raw = atob(key.replace(/-/g,'+').replace(/_/g,'/').padEnd(Math.ceil(key.length/4)*4,'='));
-    subscription = await registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:Uint8Array.from(raw,c=>c.charCodeAt(0))});
-  }
+  const previousKey=subscription?.options?.applicationServerKey;
+  const mismatch=previousKey && (new Uint8Array(previousKey).length!==applicationServerKey.length || new Uint8Array(previousKey).some((value,index)=>value!==applicationServerKey[index]));
+  if(subscription && (mismatch || (subscription.expirationTime && subscription.expirationTime<=Date.now()))){await subscription.unsubscribe();subscription=null;}
+  if (!subscription)subscription=await registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey});
   await request('subscribe',subscription.toJSON());
 }
 let pushDecisionPending = false;
@@ -607,9 +622,14 @@ async function enablePush(key) {
 function registerPush(key) {
   pushRegistration ||= navigator.serviceWorker.register('/sw.js').then(() => navigator.serviceWorker.ready)
     .then(reg => subscribe(reg,key))
-    .catch(error => { pushRegistration = null; throw error; });
+    .finally(() => {pushRegistration=null;});
   return pushRegistration;
 }
+function syncPushRegistration(){
+  if(user?.role !== 'technician' || !knownPushKey || !pushSupported() || Notification.permission !== 'granted' || Date.now()-lastPushSync<300000)return;
+  lastPushSync=Date.now();registerPush(knownPushKey).catch(()=>{lastPushSync=0;});
+}
+
 
 function showInstallOnboarding() {
   if (user?.role !== 'technician' || !session || installed() ||
@@ -656,17 +676,17 @@ function showTechnicianOnboarding(key) {
   localStorage.setItem(marker,'shown');
 }
 
-function editableLines(title,items,existing,priced,save,fields = '',label = priced ? 'Create purchase order' : 'Save parts used') {
+function editableLines(title,items,existing,priced,save,fields = '',label = priced ? 'Create purchase order' : 'Save parts used',settings={}) {
   const byId = new Map(items.map(i => [i.id,i]));
   const form = modal(title,fields+'<div id="lines"></div>'+
-    btn('Add line','add-line',true)+(!priced ? '<p class="meta">Add at least one item and its quantity before completing the repair.</p>' : ''),
+    btn('Add line','add-line',true)+(!priced ? '<p class="meta">'+e(settings.hint || 'Add at least one item and its quantity before completing the repair.')+'</p>' : ''),
     label, (data) => {
       const lines = [...$('lines').children].map(row => ({
         item_id:row.querySelector('select').value,
         quantity:Number(row.querySelector('[name="quantity"]').value),
         ...(priced ? {unit_price:Number(row.querySelector('[name="unit_price"]').value)} : {}),
       }));
-      if (!lines.length) throw new Error(priced ? 'Add at least one purchase order line' : 'Add at least one item in Parts used');
+      if (!lines.length) throw new Error(settings.emptyMessage || (priced ? 'Add at least one purchase order line' : 'Add at least one item in Parts used'));
       return save(lines,data);
     });
   function addLine(line = {}) {
@@ -753,7 +773,7 @@ function openPurchaseForm({items,suppliers}, ticket = null) {
   if (!items.some(i=>i.active)) { notice('Add a part in the item master first'); return; }
   if (!suppliers.length) { notice('Add a supplier before creating a purchase order'); return; }
   const title = ticket ? 'New purchase order · Ticket #'+ticket.ticket_number : 'New purchase order';
-  editableLines(title,items,[],true,async (lines,data) => {
+  editableLines(title,items,(ticket?.ticket_required_parts || []).map(part=>({...part,unit_price:items.find(item=>item.id === part.item_id)?.purchase_price ?? 0})),true,async (lines,data) => {
     const response = await request('po',{supplier_id:data.supplier_id,ticket_id:ticket?.id ?? null,lines});
     return 'Purchase order #'+response.po_number+' created';
   },select('Supplier','supplier_id',suppliers.map(s=>[s.id,s.name])));
@@ -906,7 +926,7 @@ $('logout').onclick = async () => {
       if (subscription) await subscription.unsubscribe();
     } catch {}
   }
-  pushRegistration = null;
+  pushRegistration = null;lastPushSync=0;knownPushKey='';
   showLogin();
 };
 submit($('login-form'),async (data,form) => {
