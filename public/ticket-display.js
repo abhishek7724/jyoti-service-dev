@@ -3,8 +3,8 @@ const rupees = value => new Intl.NumberFormat('en-IN',{style:'currency',currency
 const when = value => new Date(value).toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short',timeZone:'Asia/Kolkata'});
 
 export function statusBadge(status) {
-  const style = status === 'Paid, not billed' ? ' status-unbilled' : status === 'Awaiting Parts' ? ' status-awaiting' : '';
-  return '<span class="badge'+style+'">'+escape(status)+'</span>';
+  const style = status === 'Paid, not billed' ? ' status-unbilled' : ['Awaiting Parts','Assignment Rejected'].includes(status) ? ' status-awaiting' : '';
+  return '<span class="badge'+style+'">'+escape(status === 'Assignment Rejected' ? 'Assigned technician rejected' : status)+'</span>';
 }
 
 export function photoGallery(media,stage) {

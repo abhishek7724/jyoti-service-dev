@@ -7,7 +7,7 @@ import {accessibleTicket, ticketEvidence, createMediaUpload, finalizeMedia} from
 
 const financeRoles = ['manager', 'billing'];
 const publicActions = ['submit','track','login','refresh'];
-const fields = 'id,ticket_number,customer_name,mobile,locality,city,service_address,appliance,brand,service_type,issue,latitude,longitude,maps_url,assigned_to,status,created_at,intake_source,parts_reviewed';
+const fields = 'id,ticket_number,customer_name,mobile,locality,city,service_address,appliance,brand,service_type,issue,latitude,longitude,maps_url,assigned_to,status,created_at,intake_source,parts_reviewed,assignment_version,assignment_responded_at,rejection_reason,activity_version';
 
 function parse(schema, input) {
   const result = schema.safeParse(input);
@@ -151,12 +151,12 @@ async function staffAction(action, req, input) {
     const offset = Number.isInteger(input.offset) && input.offset >= 0 && input.offset <= 15000 ? input.offset : 0;
     let query = userDb.from('service_tickets').select(fields).order('created_at', { ascending: false }).order('id').range(offset, offset + limit - 1);
     if (input.status !== undefined) {
-      if (!['New','Assigned','In Progress','Inspection Complete','Awaiting Parts','Repair Complete','Paid, not billed','Billed','Paid'].includes(input.status)) {
+      if (!['New','Assigned','Accepted','Assignment Rejected','In Progress','Inspection Complete','Awaiting Parts','Repair Complete','Paid, not billed','Billed','Paid'].includes(input.status)) {
         throw new HttpError(422, 'Choose a valid ticket status');
       }
       query = query.eq('status',input.status);
     } else if (input.openOnly === true) {
-      query = query.in('status',['New','Assigned','In Progress','Inspection Complete','Awaiting Parts']);
+      query = query.in('status',['New','Assigned','Accepted','Assignment Rejected','In Progress','Inspection Complete','Awaiting Parts']);
     }
     if (input.ticket !== undefined && input.ticket !== '') {
       if (!/^[1-9][0-9]{4}$/.test(String(input.ticket))) throw new HttpError(422, 'Enter a five-digit ticket number');
@@ -167,6 +167,13 @@ async function staffAction(action, req, input) {
       staff.role === 'manager' ? read(userDb.from('staff').select('user_id,name').eq('role','technician').eq('active',true).order('name')) : [],
     ]);
     return { staff, tickets, technicians, limit, pushKey: staff.role === 'technician' && process.env.WEB_PUSH_PRIVATE_KEY && process.env.WEB_PUSH_SUBJECT ? process.env.WEB_PUSH_PUBLIC_KEY || '' : '' };
+  }
+  if(action === 'technicians'){requireRole(staff,'manager');return read(userDb.from('staff').select('user_id,name').eq('role','technician').eq('active',true).order('name'));}
+  if(action === 'liveConfig')return {url:process.env.SUPABASE_URL,key:process.env.SUPABASE_PUBLISHABLE_KEY};
+  if(action === 'assignmentResponse'){
+    requireRole(staff,'technician');
+    const data=parse(forms.assignmentResponse,input);
+    return read(db.rpc('respond_ticket_assignment',{p_ticket:data.id,p_user:staff.user_id,p_version:data.version,p_response:data.response,p_reason:data.reason}));
   }
   if (action === 'ticketDetail') {
     const id = parse(uuid,input.id);
@@ -236,7 +243,8 @@ async function staffAction(action, req, input) {
   if (action === 'assign') {
     requireRole(staff, 'manager');
     const { id, technician_id } = parse(forms.assign, input);
-    const previous = await read(userDb.from('service_tickets').select('assigned_to,ticket_number').eq('id',id).single());
+    const previous = await read(userDb.from('service_tickets').select('assigned_to,ticket_number,status').eq('id',id).single());
+    if(previous.assigned_to === technician_id)return {status:previous.status,ticket_number:previous.ticket_number,notification:'Assignment unchanged'};
     const updated = await read(userDb.from('service_tickets').update({ assigned_to: technician_id }).eq('id',id).select('status,ticket_number').single());
     let notification = '';
     if (technician_id && previous.assigned_to !== technician_id) {

@@ -22,6 +22,7 @@ begin
   perform public.advance_ticket_inspection(ticket,technician,'complete','Skip start');
   raise exception 'Regression: inspection skipped start';
  exception when raise_exception then if sqlerrm<>'Start inspection before saving comments or completing it' then raise;end if;end;
+ perform public.respond_ticket_assignment(ticket,technician,1,'accept','');
  perform public.advance_ticket_inspection(ticket,technician,'start','');
  perform public.advance_ticket_inspection(ticket,technician,'start','');
  perform public.advance_ticket_inspection(ticket,technician,'save','Checked compressor');
@@ -81,6 +82,7 @@ begin
  select value into n from generate_series(99999,99000,-1) value where not exists(select 1 from public.service_tickets where ticket_number=value) limit 1;
  insert into public.service_tickets(id,ticket_number,customer_name,mobile,locality,service_address,appliance,brand,service_type,issue,status,assigned_to,created_by) overriding system value
  values(ticket,n,'Excess fixture','9999999999','Test','Test','Test','Test','Bring to Shop','Test','Assigned',technician,null);
+ perform public.respond_ticket_assignment(ticket,technician,1,'accept','');
  perform public.advance_ticket_inspection(ticket,technician,'start','');
  perform public.advance_ticket_inspection(ticket,technician,'complete','Inspection done');
  perform public.complete_service_ticket(ticket,technician,inputs,'Fixed','');

@@ -98,7 +98,7 @@ test('ticket dashboard filters Billed and Paid and keeps settled tickets out of 
     assert.equal(queries.at(-1).get('status'),'eq.'+status);
   }
   assert.equal((await request('dashboard',{openOnly:true},{authorization:'Bearer test-token'})).status,200);
-  assert.equal(queries.at(-1).get('status'),'in.(New,Assigned,In Progress,Inspection Complete,Awaiting Parts)');
+  assert.equal(queries.at(-1).get('status'),'in.(New,Assigned,Accepted,Assignment Rejected,In Progress,Inspection Complete,Awaiting Parts)');
 });
 
 test('item master pages are limited to 50 and search includes code, description, brand and model',async () => {

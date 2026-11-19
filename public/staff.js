@@ -1,3 +1,4 @@
+import { createLiveUpdates } from './live-updates.js';
 import { printInvoice, printPurchase } from './documents.js';
 import { brandOptions, localityOptions, uomOptions } from './lookups.js';
 import { attachSuggestions } from './combobox.js';
@@ -23,7 +24,7 @@ const pages = { tickets:'Service tickets',items:'Item master',suppliers:'Supplie
 const originalTicket = new URL(location.href).searchParams.get('ticket') || '';
 let filter = /^[1-9][0-9]{4}$/.test(originalTicket) ? originalTicket : '';
 let ticketScope = filter ? 'all' : 'open';
-const ticketStatuses = ['New','Assigned','In Progress','Inspection Complete','Awaiting Parts','Repair Complete','Paid, not billed','Billed','Paid'];
+const ticketStatuses = ['New','Assigned','Accepted','Assignment Rejected','In Progress','Inspection Complete','Awaiting Parts','Repair Complete','Paid, not billed','Billed','Paid'];
 let offset = 0;
 let detailTicketId = null;
 let pendingTicketNumber = filter;
@@ -31,10 +32,12 @@ const completedStatuses = ['Repair Complete','Paid, not billed','Billed','Paid']
 let itemOffset = 0, itemSearch = '';
 let user, refresh, page = 'tickets', pageGeneration = 0, noticeTimer;
 let session;
+let liveUpdates=null,loadingCount=0,pendingWrites=0,lastRenderedView='';
 try { session = JSON.parse(localStorage.getItem('jyoti-staff') || 'null'); } catch { session = null; }
 
 function persistSession(value) {
   session = value;
+  liveUpdates?.setToken(value?.access_token);
   if (value) localStorage.setItem('jyoti-staff', JSON.stringify(value));
   else localStorage.removeItem('jyoti-staff');
 }
@@ -74,7 +77,12 @@ function notice(text) {
   noticeTimer = setTimeout(() => { $('notice').textContent = ''; },6500);
 }
 
-async function request(action,input = {},auth = true) {
+const readActions=new Set(['liveConfig','dashboard','ticketDetail','items','suppliers','purchases','billing','catalog','parts','invoiceDraft','customerLookup','technicians']);
+async function request(action,input={},auth=true){
+  const write=!readActions.has(action);if(write)pendingWrites++;
+  try{return await performRequest(action,input,auth);}finally{if(write)pendingWrites--;}
+}
+async function performRequest(action,input = {},auth = true) {
   if (auth && session?.expires_at && session.expires_at < Date.now() / 1000 + 30) {
     refresh ||= request('refresh',{refresh_token:session.refresh_token},false).then(persistSession).finally(() => { refresh = null; });
     try { await refresh; } catch (error) { if (error.status === 401) showLogin(); throw error; }
@@ -93,6 +101,7 @@ async function request(action,input = {},auth = true) {
 }
 
 function showLogin() {
+  liveUpdates?.stop();lastRenderedView='';
   closeSidebar();
   document.body.classList.remove('signed-in');
   $('sidebar').hidden = true;
@@ -150,7 +159,8 @@ function numberFields(data, ...names) {
   return data;
 }
 
-async function load() {
+async function load({silent=false}={}) {
+  loadingCount++;
   const generation = ++pageGeneration;
   const selectedPage = page;
   const initialLoad = $('desk').hidden;
@@ -162,7 +172,10 @@ async function load() {
     const data = await request(selectedPage === 'tickets' ? (detailTicketId ? 'ticketDetail' : 'dashboard') : selectedPage,
       selectedPage === 'tickets' && detailTicketId ? {id:detailTicketId} : selectedPage === 'tickets' ? { offset, openOnly:ticketScope === 'open', status:ticketStatuses.includes(ticketScope) ? ticketScope : undefined, ticket:filter } :
         selectedPage === 'items' ? { offset:itemOffset,search:itemSearch } : {});
-    if (generation !== pageGeneration) return;
+    if (generation !== pageGeneration) return false;
+    const view=JSON.stringify([selectedPage,detailTicketId,data]);
+    if(silent && (liveRefreshBlocked(true) || view === lastRenderedView))return !liveRefreshBlocked(true);
+    lastRenderedView=view;
     if (selectedPage === 'tickets') user = data.staff;
     if (selectedPage === 'tickets' && !detailTicketId && pendingTicketNumber) {
       const ticket = data.tickets.find(ticket=>String(ticket.ticket_number) === pendingTicketNumber);
@@ -191,6 +204,8 @@ async function load() {
     if (selectedPage === 'purchases') renderPurchases(data);
     if (selectedPage === 'billing') renderBilling(data);
     markRequiredFields($('content'));
+    ensureLiveUpdates();
+    return true;
   } catch (error) {
     if (generation !== pageGeneration || error.status === 401) return;
     if (!$('boot-status').hidden) {
@@ -198,9 +213,29 @@ async function load() {
       retry.textContent = 'Retry';
       retry.onclick = () => { $('boot-status').textContent = 'Loading service tickets…'; load(); };
       $('boot-status').replaceChildren(error.message + ' ', retry);
-    } else notice(error.message);
-  }
+    } else if(!silent)notice(error.message);
+    if(silent && error.status === 404 && selectedPage === 'tickets' && detailTicketId){detailTicketId=null;pendingTicketNumber='';filter='';ticketScope='open';history.replaceState(null,'','/staff');return load({silent:true});}
+    if(silent)throw error;
+    return false;
+  }finally{loadingCount--;}
 }
+
+function liveRefreshBlocked(ignoreLoading=false){
+  return (!ignoreLoading && loadingCount>0) || pendingWrites>0 || $('dialog').open ||
+    Boolean(document.querySelector('dialog[open],#content form[data-dirty="true"],#content .photo-actions button:disabled')) ||
+    Boolean(document.activeElement?.closest('#content form'));
+}
+function ensureLiveUpdates(){
+  liveUpdates ||= createLiveUpdates({request,reload:()=>load({silent:true}),isBlocked:()=>liveRefreshBlocked(),isActive:()=>Boolean(session) && !document.hidden && ['tickets','billing'].includes(page),getToken:()=>session?.access_token});
+  liveUpdates.start();
+}
+document.addEventListener('input',event=>{
+  const form=event.target.closest?.('#content form');
+  if(form && !form.matches('[data-assign]'))form.dataset.dirty='true';
+});
+window.addEventListener('focus',()=>liveUpdates?.refresh());
+window.addEventListener('online',()=>liveUpdates?.refresh());
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)liveUpdates?.refresh();});
 
 function mapsLink(t) {
   if (t.maps_url) {
@@ -227,8 +262,9 @@ function renderTickets({tickets,technicians,pushKey,limit}) {
     (tickets.length ? '<div class="list">'+tickets.map(t => {
       const actions = [];
       if (user.role === 'manager' && !['Repair Complete','Paid, not billed','Billed','Paid'].includes(t.status)) {
-        actions.push('<form data-assign="'+e(t.id)+'">'+select('Technician','technician_id',technicianOptions,t.assigned_to).replace(' required','')+submitButton('Save assignment')+'</form>');
+        actions.push('<form data-assign="'+e(t.id)+'" data-original="'+e(t.assigned_to || '')+'">'+select('Technician','technician_id',technicianOptions,t.assigned_to).replace(' required','')+'<button disabled>Save assignment</button></form>');
       }
+      if(user.role === 'technician' && t.status === 'Assigned')actions.push(assignmentButtons(t));
       const awaitingParts = t.status === 'Awaiting Parts';
       if (user.role === 'manager' && awaitingParts) {
         actions.push('<button type="button" class="secondary" data-ticket-po="'+e(t.id)+'">Create PO</button>');
@@ -236,7 +272,7 @@ function renderTickets({tickets,technicians,pushKey,limit}) {
       actions.push('<button type="button" class="secondary" data-ticket-detail="'+e(t.id)+'" data-ticket-number="'+t.ticket_number+'">View details</button>');
       return '<article class="panel ticket-card"'+(awaitingParts?' style="background:#fff1f2;border-color:#fca5a5"':'')+'><div class="section-title"><h2>#'+t.ticket_number+' · '+e(t.appliance)+'</h2>'+statusBadge(t.status)+'</div>'+
         '<p>'+e(t.brand)+' · '+e(t.customer_name)+'</p><p class="issue-preview">'+e(t.issue)+'</p>'+
-        '<p class="meta">'+e(t.locality)+'</p><div class="card-actions"><a class="action-link" href="tel:+91'+e(t.mobile)+'">Call</a>'+actions.join('')+'</div></article>';
+        '<p class="meta">'+e(t.locality)+'</p>'+rejectionMessage(t,technicians)+'<div class="card-actions"><a class="action-link" href="tel:+91'+e(t.mobile)+'">Call</a>'+actions.join('')+'</div></article>';
     }).join('')+'</div>' : '<p class="panel muted">No tickets match this view.</p>') +
     '<div class="actions">'+(offset ? btn('Previous','page-prev',true) : '')+(tickets.length === limit ? btn('Next','page-next',true) : '')+'</div>';
   submit($('ticket-filter'),async data => {
@@ -255,11 +291,16 @@ function renderTickets({tickets,technicians,pushKey,limit}) {
   };
   if ($('page-prev')) $('page-prev').onclick = () => { offset -= limit; load(); };
   if ($('page-next')) $('page-next').onclick = () => { offset += limit; load(); };
-  $('content').querySelectorAll('[data-assign]').forEach(form => submit(form,async data => {
+  $('content').querySelectorAll('[data-assign]').forEach(form => {
+    const field=form.elements.technician_id,button=form.querySelector('button');
+    field.onchange=()=>{button.disabled=field.value === form.dataset.original;if(button.disabled)delete form.dataset.dirty;else form.dataset.dirty='true';};
+    submit(form,async data => {
+    if(data.technician_id === form.dataset.original)return;
     const result = await request('assign',{ id:form.dataset.assign,technician_id:data.technician_id || null });
     notice(result.notification || 'Assignment saved');
     await load();
-  }));
+  });});
+  bindAssignmentResponses(tickets);
   for (const button of $('content').querySelectorAll('[data-ticket-detail]')) button.onclick = () => {
     detailTicketId=button.dataset.ticketDetail;
     history.pushState(null,'','/staff?ticket='+button.dataset.ticketNumber);
@@ -274,6 +315,29 @@ function renderTickets({tickets,technicians,pushKey,limit}) {
     } catch (error) {
       notice(error.message);
     } finally { button.disabled = false; }
+  };
+}
+
+function assignmentButtons(ticket){
+  return '<button type="button" data-accept-ticket="'+e(ticket.id)+'">Accept</button><button type="button" class="secondary reject-button" data-reject-ticket="'+e(ticket.id)+'">Reject</button>';
+}
+function rejectionMessage(ticket,technicians=[]){
+  if(ticket.status !== 'Assignment Rejected')return '';
+  const technician=technicians.find(person=>person.user_id === ticket.assigned_to);
+  return '<p class="assignment-rejected">Assigned technician rejected'+(technician ? ' · '+e(technician.name) : '')+(ticket.rejection_reason ? '<br>'+e(ticket.rejection_reason) : '')+(user.role === 'manager' ? '<br>Select another technician to reassign this ticket.' : '')+'</p>';
+}
+function bindAssignmentResponses(tickets){
+  for(const button of $('content').querySelectorAll('[data-accept-ticket]'))button.onclick=async()=>{
+    const ticket=tickets.find(t=>t.id === button.dataset.acceptTicket);
+    const peers=[...button.parentElement.querySelectorAll('[data-accept-ticket],[data-reject-ticket]')];peers.forEach(peer=>{peer.disabled=true;});
+    try{await request('assignmentResponse',{id:ticket.id,version:ticket.assignment_version,response:'accept',reason:''});notice('Assignment accepted');await load();}
+    catch(error){notice(error.message);peers.forEach(peer=>{peer.disabled=false;});}
+  };
+  for(const button of $('content').querySelectorAll('[data-reject-ticket]'))button.onclick=()=>{
+    const ticket=tickets.find(t=>t.id === button.dataset.rejectTicket);
+    modal('Reject assignment · #'+ticket.ticket_number,'<p>The manager will be able to reassign this ticket.</p><label>Reason (optional)<textarea name="reason" maxlength="500" rows="3"></textarea></label>','Reject assignment',async values=>{
+      await request('assignmentResponse',{id:ticket.id,version:ticket.assignment_version,response:'reject',reason:values.reason});return 'Assignment rejected';
+    });
   };
 }
 
@@ -299,10 +363,23 @@ function renderTicketDetail(data) {
     (data.parts.length ? '<h3>Parts used</h3><ul>'+data.parts.map(part=>'<li>'+e(part.items?.description)+' · '+e(part.quantity)+' '+e(part.items?.uom)+'</li>').join('')+'</ul>' : '')+
     '<h3 class="section-gap">After photos <small class="meta">Optional</small></h3>'+photoGallery(data.media,'completion')+'</section>'+
     '<section class="panel"><div class="section-title"><h2>Payments and billing</h2>'+(canCollect ? btn('Receive payment','receive-payment') : '')+'</div>'+financialSummary(data)+receiptHistory(data.payments,data.media)+'<div class="actions"><a class="action-link" href="'+e(customerUrl.href)+'" target="_blank" rel="noopener noreferrer">Customer view</a>'+btn('Copy customer link','copy-customer-link',true)+'</div><p class="meta section-gap">The customer needs this private link and their registered mobile number to view photos and receipts.</p></section>';
-  $('content').innerHTML='<section class="panel"><div class="section-title"><h2>'+e(t.appliance)+' · '+e(t.brand)+'</h2>'+statusBadge(t.status)+'</div><p>'+e(t.customer_name)+'</p><p class="preserve-lines">'+e(t.issue)+'</p><div class="actions"><a class="action-link" href="tel:+91'+e(t.mobile)+'">Call '+e(t.mobile)+'</a><a class="action-link" target="_blank" rel="noopener noreferrer" href="'+e(mapsLink(t))+'">Directions</a></div><dl class="ticket-facts">'+detail('Service address',[t.service_address,t.locality,t.city].filter(Boolean).join(', '))+detail('Service type',t.service_type)+detail('Source',t.intake_source)+detail('Created',date(t.created_at))+'</dl><div class="actions" id="repair-actions"></div></section>'+sections;
+  $('content').innerHTML='<section class="panel"><div class="section-title"><h2>'+e(t.appliance)+' · '+e(t.brand)+'</h2>'+statusBadge(t.status)+'</div><p>'+e(t.customer_name)+'</p><p class="preserve-lines">'+e(t.issue)+'</p><div class="actions"><a class="action-link" href="tel:+91'+e(t.mobile)+'">Call '+e(t.mobile)+'</a><a class="action-link" target="_blank" rel="noopener noreferrer" href="'+e(mapsLink(t))+'">Directions</a></div><dl class="ticket-facts">'+detail('Service address',[t.service_address,t.locality,t.city].filter(Boolean).join(', '))+detail('Service type',t.service_type)+detail('Source',t.intake_source)+detail('Created',date(t.created_at))+'</dl>'+rejectionMessage(t)+'<div class="actions" id="repair-actions"></div></section>'+sections;
   if($('copy-customer-link'))$('copy-customer-link').onclick=async()=>{try{await navigator.clipboard.writeText(customerUrl.href);notice('Customer link copied');}catch{notice('Open Customer view and copy its address to share the private link.');}};
   if(canCollect)$('receive-payment').onclick=()=>receivePaymentModal(data);
-  if(assigned && t.status === 'Assigned'){
+  if(user.role === 'manager' && t.status === 'Assignment Rejected'){
+    $('repair-actions').innerHTML=btn('Reassign technician','reassign-ticket');
+    $('reassign-ticket').onclick=async event=>{
+      const button=event.currentTarget;button.disabled=true;
+      try{
+        const technicians=await request('technicians');
+        const available=technicians.filter(person=>person.user_id !== t.assigned_to);
+        if(!available.length){notice('Add another active technician before reassigning this ticket.');return;}
+        modal('Reassign ticket #'+t.ticket_number,select('Technician','technician_id',[placeholder('Choose technician'),...available.map(person=>[person.user_id,person.name])]),'Save assignment',values=>request('assign',{id:t.id,technician_id:values.technician_id}));
+      }catch(error){notice(error.message);}finally{button.disabled=false;}
+    };
+  }
+  if(assigned && t.status === 'Assigned'){$('repair-actions').innerHTML=assignmentButtons(t);bindAssignmentResponses([t]);}
+  if(assigned && t.status === 'Accepted'){
     $('repair-actions').innerHTML=btn('Start inspection','start-inspection');
     $('start-inspection').onclick=async event=>{
       const button=event.currentTarget;button.disabled=true;

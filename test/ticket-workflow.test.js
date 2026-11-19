@@ -133,3 +133,23 @@ test('inspection steps pass the authenticated identity and legacy invoice paymen
  assert.equal((await call('inspection',{id:other,step:'complete',notes:'Checked cooling'},true)).code,200);
  assert.equal(rpc.p_action,'complete');assert.equal(rpc.p_user,id);
 });
+
+test('assignment response requires an explicit decision/version and passes the signed-in technician',async()=>{
+ assert.equal(forms.assignmentResponse.safeParse({id,version:1,response:'accept'}).success,true);
+ assert.equal(forms.assignmentResponse.safeParse({id,response:'accept'}).success,false);
+ let args;
+ globalThis.fetch=async(url,init)=>{
+  const path=new URL(url).pathname;
+  if(path==='/auth/v1/user')return Response.json({id});
+  if(path==='/rest/v1/staff')return Response.json([{user_id:id,name:'Tech',role:'technician'}]);
+  assert.equal(path,'/rest/v1/rpc/respond_ticket_assignment');args=JSON.parse(init.body);return Response.json({status:'Assignment Rejected'});
+ };
+ assert.equal((await call('assignmentResponse',{id:other,version:2,response:'reject',reason:'Unavailable'},true)).code,200);
+ assert.equal(args.p_user,id);assert.equal(args.p_version,2);assert.equal(args.p_reason,'Unavailable');
+});
+test('live configuration exposes the publishable key, never the server key',async()=>{
+ globalThis.fetch=async url=>new URL(url).pathname==='/auth/v1/user'?Response.json({id}):Response.json([{user_id:id,name:'Manager',role:'manager'}]);
+ const result=await call('liveConfig',{},true);
+ assert.deepEqual(result.body.result,{url:process.env.SUPABASE_URL,key:process.env.SUPABASE_PUBLISHABLE_KEY});
+ assert.equal(result.body.result.secret,undefined);
+});
