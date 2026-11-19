@@ -1,6 +1,6 @@
 import { clients, read } from '../lib/db.js';
 import { invoicePdf, invoiceFilename } from '../lib/invoice-pdf.js';
-import { TEMPLATE_NAME, validSignature, templateDefinition, messagePayload, metaRequest } from '../lib/whatsapp-invoice.js';
+import { TEMPLATE_NAME, validSignature, templateDefinition, messagePayload, sessionDocumentPayload, metaRequest } from '../lib/whatsapp-invoice.js';
 
 const sample={number:'SAMPLE-5001',issued_on:'2026-11-19',customer_name:'Sample Customer',service_address:'Sample address, Ambikapur, Chhattisgarh',customer_gstin:'',
   issuer:{name:'JYOTI REFRIGERATION.',address:'Ambikapur, Chhattisgarh',phone:'9340871636'},
@@ -19,6 +19,8 @@ export default async function handler(req,res) {
     config=await read(db.rpc('jyoti_whatsapp_config'));
     if(!config?.token || !validSignature(body,req.headers['x-jyoti-signature'],config.token))return res.status(401).json({error:'Unauthorized'});
     if(!config.enabled)return res.status(409).json({error:'WhatsApp testing disabled'});
+    const sessionTest=body.action==='send_session_test';
+    if(sessionTest && Date.now()>=Date.parse('2026-11-20T00:00:00Z'))return res.status(410).json({error:'Temporary session test expired'});
     const token=config.token,account='1418702660344841',phone='1403299919539677';
     const templates=await metaRequest(account+'/message_templates?name='+TEMPLATE_NAME+'&fields=name,status,components',token);
     let template=templates.data?.find(t=>t.name===TEMPLATE_NAME);
@@ -33,7 +35,7 @@ export default async function handler(req,res) {
       template=await metaRequest(account+'/message_templates',token,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(templateDefinition(handle.h))});
       return res.status(200).json({template:TEMPLATE_NAME,status:template.status,id:template.id});
     }
-    if(template?.status!=='APPROVED') {
+    if(!sessionTest && template?.status!=='APPROVED') {
       await read(db.rpc('jyoti_whatsapp_wait_for_template',{p_invoice:body.invoice_id}));
       return res.status(202).json({state:'waiting_template',template_status:template?.status||'MISSING'});
     }
@@ -50,7 +52,7 @@ export default async function handler(req,res) {
     const media=await metaRequest(phone+'/media',token,{method:'POST',body:form});
     if(!media.id)throw new Error('No uploaded PDF media ID');
     phase='send';
-    const result=await metaRequest(phone+'/messages',token,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(messagePayload(bill,media.id,config.test_recipient))});
+    const result=await metaRequest(phone+'/messages',token,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sessionTest?sessionDocumentPayload(bill,media.id,config.test_recipient):messagePayload(bill,media.id,config.test_recipient))});
     const message=result.messages?.[0];
     if(!message?.id)throw new Error('No message acceptance returned');
     phase='accepted';
@@ -64,3 +66,4 @@ export default async function handler(req,res) {
     return res.status(502).json({state,code:error.code||'INTERNAL',error:error.metaMessage||'Invoice WhatsApp operation failed'});
   }
 }
+

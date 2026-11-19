@@ -60,3 +60,27 @@ test('approved template uploads a private invoice PDF and sends its exact media 
   assert.equal(res.code,200);assert.equal(finished,true);assert.equal(sent.template.components[0].parameters[0].document.id,'media-test');
  }finally{globalThis.fetch=realFetch;}
 });
+test('temporary reply-window test sends a document while template is pending',async()=>{
+ const realFetch=globalThis.fetch,token='test-only-secret';let sent,uploaded=false,finished=false;
+ Object.assign(process.env,{SUPABASE_URL:'https://db.example.invalid',SUPABASE_PUBLISHABLE_KEY:'test-only',SUPABASE_SERVICE_ROLE_KEY:'test-only'});
+ const body={action:'send_session_test',invoice_id:bill.id,timestamp:String(Math.floor(Date.now()/1000))};
+ const signature=createHmac('sha256',token).update('send_session_test:'+bill.id+':'+body.timestamp).digest('hex');
+ globalThis.fetch=async(url,init)=>{
+   const u=new URL(url),path=u.pathname;
+   if(path.endsWith('/jyoti_whatsapp_config'))return Response.json({token,enabled:true,test_recipient:'919685858101'});
+   if(path.endsWith('/message_templates'))return Response.json({data:[{name:TEMPLATE_NAME,status:'PENDING'}]});
+   if(path.endsWith('/jyoti_whatsapp_claim'))return Response.json(bill);
+   if(path==='/storage/v1/bucket')return Response.json([{id:'invoice-pdfs',public:false}]);
+   if(path.includes('/storage/v1/object/invoice-pdfs/')){assert.equal(Buffer.from(init.body).subarray(0,5).toString(),'%PDF-');uploaded=true;return Response.json({Key:'invoice.pdf'});}
+   if(path.endsWith('/media')){assert.ok(uploaded);assert.equal(init.body.get('file').type,'application/pdf');return Response.json({id:'media-test'});}
+   if(path.endsWith('/messages')){sent=JSON.parse(init.body);return Response.json({messages:[{id:'message-test',message_status:'accepted'}]});}
+   if(path.endsWith('/jyoti_whatsapp_finish')){const b=JSON.parse(init.body);assert.equal(b.p_state,'accepted');assert.equal(b.p_media,'media-test');finished=true;return Response.json(null);}
+   throw new Error('Unexpected fetch '+path);
+ };
+ try{
+  const res={setHeader(){},status(n){this.code=n;return this;},json(v){this.body=v;}};
+  await handler({method:'POST',headers:{'x-jyoti-signature':signature},body},res);
+  assert.equal(res.code,200);assert.equal(finished,true);assert.equal(sent.document.id,'media-test');
+ }finally{globalThis.fetch=realFetch;}
+});
+
