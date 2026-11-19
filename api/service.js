@@ -1,11 +1,13 @@
 import { createHmac } from 'node:crypto';
-import { sendNotification } from 'web-push';
+import { sendAssignmentAlerts } from '../lib/push.js';
 import { HttpError, clients, read, requireRole, staffSession } from '../lib/db.js';
 import { forms, mobile, staffEmail, ticket, uuid, validatePushEndpoint } from '../lib/validation.js';
 
+import {accessibleTicket, ticketEvidence, createMediaUpload, finalizeMedia} from '../lib/ticket-workflow.js';
+
 const financeRoles = ['manager', 'billing'];
 const publicActions = ['submit','track','login','refresh'];
-const fields = 'id,ticket_number,customer_name,mobile,locality,city,service_address,appliance,brand,service_type,issue,latitude,longitude,maps_url,assigned_to,status,created_at,intake_source,parts_reviewed';
+const fields = 'id,ticket_number,customer_name,mobile,locality,city,service_address,appliance,brand,service_type,issue,latitude,longitude,maps_url,assigned_to,status,created_at,intake_source,parts_reviewed,assignment_version,assignment_responded_at,rejection_reason,activity_version';
 
 function parse(schema, input) {
   const result = schema.safeParse(input);
@@ -80,46 +82,29 @@ async function publicAction(action, req, input) {
     const number = String(input.ticket);
     if (!/^[1-9][0-9]{4}$/.test(number)) throw new HttpError(422, 'Enter a five-digit ticket number');
     await rateLimit(db, req, 'track-ticket', 12, number);
-    return read(db.from('service_tickets').select('status').eq('ticket_number', Number(number)).eq('mobile', phone).maybeSingle());
+    if (!input.access) return read(db.from('service_tickets').select('status').eq('ticket_number',Number(number)).eq('mobile',phone).maybeSingle());
+    const access = parse(uuid,input.access);
+    const customerTicket = await read(db.from('service_tickets').select('id,ticket_number,customer_name,appliance,brand,status,inspection_notes,completion_notes')
+      .eq('ticket_number',Number(number)).eq('mobile',phone).eq('customer_view_key',access).maybeSingle());
+    if (!customerTicket) return null;
+    const {id,...details} = customerTicket;
+    return {...details,...await ticketEvidence(db,id)};
   }
   if (input.website) throw new HttpError(422, 'Could not submit the complaint');
   const details = publicTicket(input);
   const key = parse(uuid, input.key);
-  let result = await read(db.from('service_tickets').select('ticket_number').eq('intake_key', key).eq('mobile', details.mobile).maybeSingle());
+  let result = await read(db.from('service_tickets').select('ticket_number,customer_view_key').eq('intake_key', key).eq('mobile', details.mobile).maybeSingle());
   if (!result) {
     try {
-      result = await read(db.from('service_tickets').insert({ ...details, intake_key: key, intake_source: 'Website' }).select('ticket_number').single());
+      result = await read(db.from('service_tickets').insert({ ...details, intake_key: key, intake_source: 'Website' }).select('ticket_number,customer_view_key').single());
     } catch (error) {
       if (error.status !== 409) throw error;
-      result = await read(db.from('service_tickets').select('ticket_number').eq('intake_key', key).eq('mobile', details.mobile).single());
+      result = await read(db.from('service_tickets').select('ticket_number,customer_view_key').eq('intake_key', key).eq('mobile', details.mobile).single());
     }
   }
-  return { ticket: result.ticket_number };
+  return {ticket:result.ticket_number,access:result.customer_view_key};
 }
 
-async function notify(db, assignee, ticketNumber) {
-  const { WEB_PUSH_PUBLIC_KEY: publicKey, WEB_PUSH_PRIVATE_KEY: privateKey, WEB_PUSH_SUBJECT: subject } = process.env;
-  if (!publicKey || !privateKey || !subject) return 'Push is not configured';
-  const subscriptions = await read(db.from('push_subscriptions').select('endpoint,subscription').eq('user_id', assignee));
-  if (!subscriptions.length) return 'Technician has no notification subscription';
-  let delivered = 0;
-  await Promise.all(subscriptions.map(async ({ endpoint, subscription }) => {
-    if (!validatePushEndpoint(endpoint)) return;
-    try {
-      await sendNotification(subscription, JSON.stringify({
-        title: 'Ticket #' + ticketNumber + ' assigned',
-        body: 'Ticket #' + ticketNumber + ' has been assigned to you.',
-        ticketNumber,
-      }), { vapidDetails: { subject, publicKey, privateKey }, timeout: 4000, TTL: 3600 });
-      delivered++;
-    } catch (error) {
-      if ([404, 410].includes(error.statusCode)) {
-        await db.from('push_subscriptions').delete().eq('endpoint', endpoint).eq('user_id', assignee);
-      }
-    }
-  }));
-  return delivered ? 'Push accepted by notification service' : 'Push could not be delivered';
-}
 
 function issuerDetails() {
   let issuer;
@@ -131,7 +116,8 @@ function issuerDetails() {
 }
 
 async function staffAction(action, req, input) {
-  const { db, userDb, staff } = await staffSession(req);
+  const context = await staffSession(req);
+  const { db, userDb, staff } = context;
   if (action === 'logout') {
     const token = req.headers.authorization.replace(/^Bearer /i, '');
     await db.auth.admin.signOut(token, 'local');
@@ -142,12 +128,12 @@ async function staffAction(action, req, input) {
     const offset = Number.isInteger(input.offset) && input.offset >= 0 && input.offset <= 15000 ? input.offset : 0;
     let query = userDb.from('service_tickets').select(fields).order('created_at', { ascending: false }).order('id').range(offset, offset + limit - 1);
     if (input.status !== undefined) {
-      if (!['New','Assigned','In Progress','Awaiting Parts','Repair Complete'].includes(input.status)) {
+      if (!['New','Assigned','Accepted','Assignment Rejected','In Progress','Inspection Complete','Awaiting Parts','Repair Complete','Paid, not billed','Billed','Paid'].includes(input.status)) {
         throw new HttpError(422, 'Choose a valid ticket status');
       }
       query = query.eq('status',input.status);
     } else if (input.openOnly === true) {
-      query = query.neq('status','Repair Complete');
+      query = query.in('status',['New','Assigned','Accepted','Assignment Rejected','In Progress','Inspection Complete','Awaiting Parts']);
     }
     if (input.ticket !== undefined && input.ticket !== '') {
       if (!/^[1-9][0-9]{4}$/.test(String(input.ticket))) throw new HttpError(422, 'Enter a five-digit ticket number');
@@ -157,15 +143,72 @@ async function staffAction(action, req, input) {
       read(query),
       staff.role === 'manager' ? read(userDb.from('staff').select('user_id,name').eq('role','technician').eq('active',true).order('name')) : [],
     ]);
+    const waiting=tickets.filter(ticket=>ticket.status === 'Awaiting Parts');
+    if(waiting.length){
+      const required=await read(db.from('ticket_required_parts').select('ticket_id,item_id,quantity,items(code,description,uom)').in('ticket_id',waiting.map(ticket=>ticket.id)));
+      for(const ticket of waiting)ticket.ticket_required_parts=required.filter(part=>part.ticket_id===ticket.id);
+    }
     return { staff, tickets, technicians, limit, pushKey: staff.role === 'technician' && process.env.WEB_PUSH_PRIVATE_KEY && process.env.WEB_PUSH_SUBJECT ? process.env.WEB_PUSH_PUBLIC_KEY || '' : '' };
+  }
+  if(action === 'technicians'){requireRole(staff,'manager');return read(userDb.from('staff').select('user_id,name').eq('role','technician').eq('active',true).order('name'));}
+  if(action === 'liveConfig')return {url:process.env.SUPABASE_URL,key:process.env.SUPABASE_PUBLISHABLE_KEY};
+  if(action === 'assignmentResponse'){
+    requireRole(staff,'technician');
+    const data=parse(forms.assignmentResponse,input);
+    return read(db.rpc('respond_ticket_assignment',{p_ticket:data.id,p_user:staff.user_id,p_version:data.version,p_response:data.response,p_reason:data.reason}));
+  }
+  if (action === 'ticketDetail') {
+    const id = parse(uuid,input.id);
+    const ticket = await accessibleTicket(userDb,staff,id);
+    return {staff,ticket,pushKey:staff.role === 'technician' ? process.env.WEB_PUSH_PUBLIC_KEY || '' : '',requiredParts:await read(db.from('ticket_required_parts').select('item_id,quantity,items(code,description,uom)').eq('ticket_id',id)),...await ticketEvidence(db,id)};
+  }
+  if(action === 'awaitingParts'){
+    requireRole(staff,'technician');const data=parse(forms.parts,input);
+    await read(db.rpc('set_ticket_awaiting_parts',{p_ticket:data.id,p_user:staff.user_id,p_parts:data.parts}));return {saved:true};
+  }
+  if (action === 'inspection') {
+    requireRole(staff,'technician');
+    const data = parse(forms.inspection,input);
+    await read(db.rpc('advance_ticket_inspection',{p_ticket:data.id,p_user:staff.user_id,p_action:data.step,p_notes:data.notes}));
+    return {saved:true};
+  }
+  if (action === 'completeRepair') {
+    requireRole(staff,'technician');
+    const data = parse(forms.completion,input);
+    return read(db.rpc('complete_service_ticket',{p_ticket:data.id,p_user:staff.user_id,p_parts:data.parts,p_notes:data.notes,p_test:''}));
+  }
+  if (action === 'receivePayment') {
+    const data = parse(forms.collection,input);
+    return read(db.rpc('receive_ticket_payment',{p_id:data.id,p_ticket:data.ticket_id,p_user:staff.user_id,p_amount:data.amount,p_method:data.method,
+      p_reference:data.reference,p_proof:data.proof_media_id,p_signature:data.signature_media_id,p_waiver:data.signature_waiver}));
+  }
+  if (action === 'mediaUpload') {
+    const data = parse(forms.mediaUpload,input);
+    await rateLimit(db,req,'media-upload',60,staff.user_id);
+    return createMediaUpload(context,data);
+  }
+  if (action === 'mediaReady') return finalizeMedia(context,parse(forms.mediaReady,input));
+  if(action === 'staff'){
+    requireRole(staff,'manager');
+    const limit=50,offset=input.offset ?? 0;
+    if(!Number.isSafeInteger(offset) || offset<0 || offset>1000000)throw new HttpError(422,'Choose a valid staff page');
+    if(input.search!==undefined && (typeof input.search!=='string' || input.search.length>100))throw new HttpError(422,'Search must contain at most 100 characters');
+    let query=db.from('staff').select('user_id,name,username,mobile_number,role,active',{count:'exact'}).order('name').order('user_id').range(offset,offset+limit-1);
+    const search=(input.search || '').trim();
+    if(search){const pattern=JSON.stringify('%'+search.replace(/[\\%_]/g,character=>'\\'+character)+'%');query=query.or(['name','username','mobile_number'].map(column=>column+'.ilike.'+pattern).join(','));}
+    const result=await query;return {staff:await read(result),total:result.count ?? 0,offset,limit};
+  }
+  if(action === 'updateStaff'){
+    requireRole(staff,'manager');const data=parse(forms.staffProfile,input);
+    await read(db.rpc('update_staff_profile',{p_actor:staff.user_id,p_user:data.user_id,p_name:data.name,p_mobile:data.mobile_number,p_role:data.role}));return {saved:true};
   }
   if (action === 'createStaff') {
     requireRole(staff, 'manager');
-    const { username, password, name, role } = parse(forms.staff, input);
+    const { username, password, name, role,mobile_number } = parse(forms.staff, input);
     const { data, error } = await db.auth.admin.createUser({ email: staffEmail(username), password, email_confirm: true });
     if (error || !data.user) throw new HttpError(error?.status === 422 ? 409 : 422, error?.status === 422 ? 'That username may already be in use' : 'Staff account could not be created');
     try {
-      await read(db.from('staff').insert({ user_id: data.user.id, name, role }));
+      await read(db.from('staff').insert({ user_id: data.user.id, name, role,username,mobile_number }));
     } catch (failure) {
       const cleanup = await db.auth.admin.deleteUser(data.user.id);
       if (cleanup.error) console.error('Staff onboarding cleanup failed', data.user.id);
@@ -183,11 +226,8 @@ async function staffAction(action, req, input) {
     requireRole(staff, 'manager');
     const key = parse(uuid,input.key);
     if (!['Walk-in','Phone'].includes(input.intake_source)) throw new HttpError(422, 'Choose phone or walk-in');
-    const details = parse(ticket,input);
-    if (details.service_type === 'Home Visit' && details.latitude === null && !details.maps_url) {
-      throw new HttpError(422, 'Add a location pin for the home visit');
-    }
-    details.maps_url = optionalMaps(details.maps_url);
+    // Shop staff book against the customer's address, not the shop device's location.
+    const details = parse(ticket,{...input,latitude:null,longitude:null,maps_url:null});
     const existing = () => read(db.from('service_tickets').select('ticket_number').eq('intake_key',key).eq('created_by',staff.user_id).maybeSingle());
     const prior = await existing();
     if (prior) return prior;
@@ -203,11 +243,12 @@ async function staffAction(action, req, input) {
   if (action === 'assign') {
     requireRole(staff, 'manager');
     const { id, technician_id } = parse(forms.assign, input);
-    const previous = await read(userDb.from('service_tickets').select('assigned_to,ticket_number').eq('id',id).single());
+    const previous = await read(userDb.from('service_tickets').select('assigned_to,ticket_number,status').eq('id',id).single());
+    if(previous.assigned_to === technician_id)return {status:previous.status,ticket_number:previous.ticket_number,notification:'Assignment unchanged'};
     const updated = await read(userDb.from('service_tickets').update({ assigned_to: technician_id }).eq('id',id).select('status,ticket_number').single());
     let notification = '';
     if (technician_id && previous.assigned_to !== technician_id) {
-      try { notification = await notify(db, technician_id, updated.ticket_number); }
+      try { notification = await sendAssignmentAlerts(db, technician_id, updated.ticket_number); }
       catch { notification = 'Ticket assigned. Push could not be delivered.'; }
     }
     return { ...updated, notification };
@@ -221,7 +262,7 @@ async function staffAction(action, req, input) {
     requireRole(staff,'technician');
     const subscription = parse(forms.subscription,input);
     if (!validatePushEndpoint(subscription.endpoint)) throw new HttpError(422,'This browser notification service is unsupported');
-    await read(db.from('push_subscriptions').upsert({ endpoint:subscription.endpoint,user_id:staff.user_id,subscription }));
+    await read(db.from('push_subscriptions').upsert({ endpoint:subscription.endpoint,user_id:staff.user_id,subscription,last_registered_at:new Date().toISOString(),last_error_code:null }));
     return { subscribed:true };
   }
   if (action === 'parts' || action === 'saveParts') {
@@ -232,15 +273,18 @@ async function staffAction(action, req, input) {
       const { parts } = parse(forms.parts,input);
       return read(db.rpc('save_ticket_parts',{ p_ticket:id,p_user:staff.user_id,p_parts:parts }));
     }
-    const [items,parts] = await Promise.all([
+    const [items,parts,required] = await Promise.all([
       read(db.from('items').select('id,code,description,uom,active').order('code')),
       read(db.from('ticket_parts').select('item_id,quantity').eq('ticket_id',id)),
+      read(db.from('ticket_required_parts').select('item_id,quantity').eq('ticket_id',id)),
     ]);
-    return { items,parts };
+    return { items,parts,required };
   }
   requireRole(staff,...financeRoles);
   switch (action) {
     case 'catalog': return catalog(db);
+    case 'items': return itemMaster(db,input);
+    case 'suppliers': return {suppliers:await read(db.from('suppliers').select('*').order('name'))};
     case 'item': return read(db.from('items').upsert(parse(forms.item,input),{onConflict:'code'}).select('id').single());
     case 'supplier': return read(db.from('suppliers').insert(parse(forms.supplier,input)).select('id').single());
     case 'purchases': return purchases(db);
@@ -260,7 +304,7 @@ async function staffAction(action, req, input) {
         read(db.from('service_tickets').select('customer_name,service_address,locality,city,ticket_number,status').eq('id',id).single()),
         read(db.from('ticket_parts').select('item_id,quantity,items(description,uom,hsn_sac,sale_price,tax_rate)').eq('ticket_id',id)),
       ]);
-      if (booking.status !== 'Repair Complete') throw new HttpError(422,'Finish the repair before billing');
+      if (!['Repair Complete','Paid, not billed'].includes(booking.status)) throw new HttpError(422,'Finish the repair before billing');
       return { booking,parts };
     }
     case 'invoice': {
@@ -274,10 +318,26 @@ async function staffAction(action, req, input) {
     }
     case 'payment': {
       const p = parse(forms.payment,input);
+      if(p.invoice_id)throw new HttpError(422,'Open Receive payment on the ticket to record a customer payment with its acknowledgement or UPI proof');
       return read(db.rpc('record_payment',{p_id:p.id,p_invoice:p.invoice_id,p_bill:p.supplier_bill_id,p_amount:p.amount,p_method:p.method,p_reference:p.reference}));
     }
     default: throw new HttpError(404,'Unknown action');
   }
+}
+
+async function itemMaster(db,input) {
+  const limit = 50;
+  const offset = input.offset ?? 0;
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > 10000000) throw new HttpError(422,'Choose a valid item page');
+  if (input.search !== undefined && (typeof input.search !== 'string' || input.search.length > 100)) throw new HttpError(422,'Search must contain at most 100 characters');
+  const search = (input.search || '').trim();
+  let query = db.from('items').select('*',{count:'exact'}).order('code').range(offset,offset+limit-1);
+  if (search) {
+    const pattern = JSON.stringify('%'+search.replace(/[\\%_]/g,character=>'\\'+character)+'%');
+    query = query.or(['code','description','brand','model'].map(column=>column+'.ilike.'+pattern).join(','));
+  }
+  const result = await query;
+  return {items:await read(result),total:result.count ?? 0,offset,limit};
 }
 
 async function catalog(db) {
@@ -298,7 +358,7 @@ async function purchases(db) {
 
 async function billing(db) {
   const [completed,invoices] = await Promise.all([
-    read(db.from('service_tickets').select('id,ticket_number,customer_name,created_at,invoices!left(id)').eq('status','Repair Complete').is('invoices',null).order('created_at',{ascending:false})),
+    read(db.from('service_tickets').select('id,ticket_number,customer_name,created_at,payments!payments_ticket_id_fkey(amount),invoices!left(id)').in('status',['Repair Complete','Paid, not billed']).is('invoices',null).order('created_at',{ascending:false})),
     read(db.from('invoices').select('*,service_tickets(ticket_number,mobile),payments(amount,method,reference,paid_at)').order('issued_on',{ascending:false}).order('id')),
   ]);
   return { completed,invoices };

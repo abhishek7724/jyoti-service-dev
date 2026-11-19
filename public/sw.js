@@ -1,11 +1,12 @@
 self.addEventListener("install", event => event.waitUntil(self.skipWaiting()));
+self.addEventListener('activate',event=>event.waitUntil(self.clients.claim()));
 
 self.addEventListener('push', event => {
   let payload;
   try { payload = event.data?.json(); } catch { return; }
   if (!payload) return;
   event.waitUntil(self.registration.showNotification(payload.title, {
-    body: payload.body, icon: '/icon-192.png',
+    body: payload.body, icon: '/icon-192.png',badge:'/icon-192.png',requireInteraction:true,renotify:true,
     data: { ticketNumber: payload.ticketNumber },
     tag: 'jyoti-ticket-' + payload.ticketNumber,
   }));

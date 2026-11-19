@@ -56,7 +56,7 @@ test('invoice prices and discounts reject invalid input', () => {
 test('live invoice preview calculates percentage and fixed discounts', () => {
   const staff = readFileSync(new URL('../public/staff.js',import.meta.url),'utf8');
   const source = staff.slice(staff.indexOf('function updateInvoiceDraft'),staff.indexOf('function renderBilling'));
-  const context = {money:n=>n.toFixed(2)};
+  const context = {money:n=>n.toFixed(2),markRequiredFields(){}};
   vm.createContext(context);
   vm.runInContext(source,context);
   const fields = {

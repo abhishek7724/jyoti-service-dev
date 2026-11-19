@@ -36,14 +36,14 @@ test('public complaint has no login and creates only one booking on retry',async
       assert.equal(body.intake_key,key);
       assert.equal(body.maps_url,'https://maps.app.goo.gl/example');
       assert.equal(record,undefined);
-      record = {ticket_number:10001};
+      record = {ticket_number:10001,customer_view_key:key};
     }
     return Response.json(init.method === 'POST' ? record : record ? [record] : []);
   };
   const input = { name:'Test Customer',mobile:'9000000000',appliance:'Refrigerator',brand:'Other',
     service:'Home Visit',issue:'Not cooling',address:'Test Address',maps:'https://maps.app.goo.gl/example',key };
   for (const _ of [1,2]) {
-    assert.deepEqual(await request('submit',input),{status:200,body:{ok:true,result:{ticket:10001}}});
+    assert.deepEqual(await request('submit',input),{status:200,body:{ok:true,result:{ticket:10001,access:key}}});
   }
 });
 
@@ -77,4 +77,85 @@ test('payment precision, invoice words and push destination validation',() => {
   assert.equal(validatePushEndpoint('https://fcm.googleapis.com/fcm/send/example'),true);
   assert.equal(validatePushEndpoint('https://fcm.googleapis.com.example.invalid/'),false);
   assert.equal(validatePushEndpoint('https://fcm.googleapis.com:444/fcm/send/example'),false);
+});
+
+test('ticket dashboard filters Billed and Paid and keeps settled tickets out of Open tickets',async () => {
+  const queries = [];
+  globalThis.fetch = async (url) => {
+    const target = new URL(url);
+    if (target.pathname === '/auth/v1/user') return Response.json({id:key});
+    if (target.pathname === '/rest/v1/staff') {
+      return Response.json(target.searchParams.get('select').includes('role')
+        ? [{user_id:key,name:'Test Manager',role:'manager'}] : []);
+    }
+    assert.equal(target.pathname,'/rest/v1/service_tickets');
+    queries.push(target.searchParams);
+    return Response.json([]);
+  };
+  for (const status of ['Inspection Complete','Paid, not billed','Billed','Paid']) {
+    const result = await request('dashboard',{status},{authorization:'Bearer test-token'});
+    assert.equal(result.status,200);
+    assert.equal(queries.at(-1).get('status'),'eq.'+status);
+  }
+  assert.equal((await request('dashboard',{openOnly:true},{authorization:'Bearer test-token'})).status,200);
+  assert.equal(queries.at(-1).get('status'),'in.(New,Assigned,Accepted,Assignment Rejected,In Progress,Inspection Complete,Awaiting Parts)');
+});
+
+test('item master pages are limited to 50 and search includes code, description, brand and model',async () => {
+  globalThis.fetch = async (url,init) => {
+    const target = new URL(url);
+    if (target.pathname === '/auth/v1/user') return Response.json({id:key});
+    if (target.pathname === '/rest/v1/staff') return Response.json([{user_id:key,name:'Test Manager',role:'manager'}]);
+    assert.equal(target.pathname,'/rest/v1/items');
+    assert.equal(target.searchParams.get('offset'),'50');
+    assert.equal(target.searchParams.get('limit'),'50');
+    assert.equal(target.searchParams.get('order'),'code.asc');
+    assert.match(new Headers(init.headers).get('prefer'),/count=exact/);
+    for (const column of ['code','description','brand','model']) {
+      assert.ok(target.searchParams.get('or').includes(column+'.ilike."%LG%"'));
+    }
+    return Response.json([{id:key,code:'PART-051'}],{headers:{'content-range':'50-50/101'}});
+  };
+  const result = await request('items',{search:'LG',offset:50},{authorization:'Bearer test-token'});
+  assert.equal(result.status,200);
+  assert.equal(result.body.result.total,101);
+  assert.equal(result.body.result.limit,50);
+  assert.equal(result.body.result.offset,50);
+  assert.equal(result.body.result.items[0].code,'PART-051');
+});
+
+test('item customer price is optional and brand and model remain optional',() => {
+  const item = {code:'P-01',description:'Repair part',uom:'Piece',purchase_price:100,tax_rate:18};
+  assert.equal(forms.item.parse(item).sale_price,null);
+  assert.equal(forms.item.parse({...item,sale_price:null}).sale_price,null);
+  assert.equal(forms.item.parse({...item,sale_price:0}).sale_price,0);
+  assert.equal(forms.item.safeParse({...item,sale_price:-1}).success,false);
+  assert.equal(forms.item.parse({...item,brand:'LG',model:'ABC-01'}).model,'ABC-01');
+});
+
+test('manager home-visit booking uses the customer address without shop-device coordinates',async () => {
+  let saved;
+  globalThis.fetch = async (url,init) => {
+    const target = new URL(url);
+    if (target.pathname === '/auth/v1/user') return Response.json({id:key});
+    if (target.pathname === '/rest/v1/staff') return Response.json([{user_id:key,name:'Test Manager',role:'manager'}]);
+    assert.equal(target.pathname,'/rest/v1/service_tickets');
+    if (init.method !== 'POST') return Response.json([]);
+    saved = JSON.parse(init.body);
+    return Response.json({ticket_number:10008});
+  };
+  const booking = {key,customer_name:'Test customer',mobile:'9000000000',locality:'Godhanpur',
+    service_address:'Near ATM',appliance:'Air Conditioner',brand:'LG',service_type:'Home Visit',
+    intake_source:'Phone',issue:'Not cooling'};
+  assert.equal((await request('createTicket',booking,{authorization:'Bearer test-token'})).status,200);
+  assert.equal(saved.service_address,'Near ATM');
+  assert.equal(saved.locality,'Godhanpur');
+  assert.equal(saved.latitude,null);
+  assert.equal(saved.longitude,null);
+  assert.equal(saved.maps_url,null);
+  // Cached clients cannot accidentally save the manager's shop location either.
+  assert.equal((await request('createTicket',{...booking,latitude:23.1,longitude:83.2,maps_url:'https://maps.google.com/?q=shop'},
+    {authorization:'Bearer test-token'})).status,200);
+  assert.equal(saved.latitude,null);
+  assert.equal(saved.maps_url,null);
 });
