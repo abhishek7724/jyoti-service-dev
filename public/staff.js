@@ -2,7 +2,7 @@ import { printInvoice, printPurchase } from './documents.js';
 import { brandOptions, localityOptions, uomOptions } from './lookups.js';
 import { attachSuggestions } from './combobox.js';
 import { statusBadge,photoGallery,receiptHistory,financialSummary } from './ticket-display.js';
-import { compressPhoto,uploadTicketMedia,mountPhotoControls,signaturePad } from './ticket-media.js';
+import { compressPhoto,uploadTicketMedia,mountPhotoControls,signaturePad,cameraIcon } from './ticket-media.js';
 
 const $ = (id) => document.getElementById(id);
 const e = (value) => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -23,7 +23,7 @@ const pages = { tickets:'Service tickets',items:'Item master',suppliers:'Supplie
 const originalTicket = new URL(location.href).searchParams.get('ticket') || '';
 let filter = /^[1-9][0-9]{4}$/.test(originalTicket) ? originalTicket : '';
 let ticketScope = filter ? 'all' : 'open';
-const ticketStatuses = ['New','Assigned','In Progress','Awaiting Parts','Repair Complete','Paid, not billed','Billed','Paid'];
+const ticketStatuses = ['New','Assigned','In Progress','Inspection Complete','Awaiting Parts','Repair Complete','Paid, not billed','Billed','Paid'];
 let offset = 0;
 let detailTicketId = null;
 let pendingTicketNumber = filter;
@@ -280,8 +280,10 @@ function renderTickets({tickets,technicians,pushKey,limit}) {
 function renderTicketDetail(data) {
   const t=data.ticket;
   const assigned=user.role === 'technician' && t.assigned_to === user.user_id;
-  const open=!completedStatuses.includes(t.status);
-  const canCollect=(assigned || ['manager','billing'].includes(user.role)) && !open && (!data.invoice || data.remaining > 0);
+  const complete=completedStatuses.includes(t.status);
+  const inspecting=t.status === 'In Progress';
+  const inspected=['Inspection Complete','Awaiting Parts'].includes(t.status) || complete;
+  const canCollect=(assigned || ['manager','billing'].includes(user.role)) && complete && (!data.invoice || data.remaining > 0);
   $('page-title').textContent='Ticket #'+t.ticket_number;
   $('page-actions').innerHTML=btn('Back to tickets','back-tickets',true);
   $('back-tickets').onclick=()=>{detailTicketId=null;pendingTicketNumber='';history.replaceState(null,'','/staff');load();};
@@ -289,36 +291,52 @@ function renderTicketDetail(data) {
   customerUrl.search=new URLSearchParams({view:'track',ticket:t.ticket_number,access:t.customer_view_key}).toString();
   customerUrl.hash='complaints';
   const detail=(label,value)=>'<div><dt>'+label+'</dt><dd>'+e(value || '—')+'</dd></div>';
-  $('content').innerHTML='<section class="panel"><div class="section-title"><h2>'+e(t.appliance)+' · '+e(t.brand)+'</h2>'+statusBadge(t.status)+'</div><p>'+e(t.customer_name)+'</p><p class="preserve-lines">'+e(t.issue)+'</p><div class="actions"><a class="action-link" href="tel:+91'+e(t.mobile)+'">Call '+e(t.mobile)+'</a><a class="action-link" target="_blank" rel="noopener noreferrer" href="'+e(mapsLink(t))+'">Directions</a></div><dl class="ticket-facts">'+detail('Service address',[t.service_address,t.locality,t.city].filter(Boolean).join(', '))+detail('Service type',t.service_type)+detail('Source',t.intake_source)+detail('Created',date(t.created_at))+'</dl><div class="actions" id="repair-actions"></div></section>'+
-    '<section class="panel"><h2>Inspection</h2>'+(assigned && open ? '<form id="inspection-form" class="grid"><label>Inspection notes<textarea name="notes" maxlength="2000" rows="3">'+e(t.inspection_notes)+'</textarea></label>'+submitButton(t.status === 'Assigned' ? 'Start inspection' : 'Save inspection')+'</form>' : '<p class="preserve-lines">'+e(t.inspection_notes || 'No inspection notes yet.')+'</p>')+'<h3 class="section-gap">Before photos <small class="meta">Optional</small></h3><div id="inspection-gallery">'+photoGallery(data.media,'inspection')+'</div><div id="inspection-photos"></div></section>'+
-    '<section class="panel"><h2>Repair completion</h2><p class="preserve-lines">'+e(t.completion_notes || 'Complete the repair to record the work performed, parts used and test result.')+'</p>'+(t.test_result ? '<h3>Test result</h3><p class="preserve-lines">'+e(t.test_result)+'</p>' : '')+(data.parts.length ? '<h3>Parts used</h3><ul>'+data.parts.map(part=>'<li>'+e(part.items?.description)+' · '+e(part.quantity)+' '+e(part.items?.uom)+'</li>').join('')+'</ul>' : '')+'<h3 class="section-gap">After photos <small class="meta">Optional</small></h3>'+photoGallery(data.media,'completion')+'<div id="completion-photos"></div></section>'+
+  let sections='';
+  if(inspecting || inspected)sections+='<section class="panel"><h2>Inspection'+(inspecting ? ' in progress' : ' complete')+'</h2>'+
+    (assigned && inspecting ? '<form id="inspection-form" class="grid"><label>Inspection notes<textarea name="notes" maxlength="2000" rows="3">'+e(t.inspection_notes)+'</textarea></label><div class="actions">'+'<button type="submit" class="secondary">Save comments</button><button type="submit" name="finish_inspection" value="yes">Inspection complete</button></div></form>' : '<p class="preserve-lines">'+e(t.inspection_notes || 'No inspection comments.')+'</p>')+
+    '<h3 class="section-gap">Before photos <small class="meta">Optional</small></h3><div id="inspection-photos"></div><div id="inspection-gallery">'+photoGallery(data.media,'inspection')+'</div></section>';
+  if(complete)sections+='<section class="panel"><h2>Repair completion</h2><p class="preserve-lines">'+e(t.completion_notes || 'Repair completed.')+'</p>'+
+    (data.parts.length ? '<h3>Parts used</h3><ul>'+data.parts.map(part=>'<li>'+e(part.items?.description)+' · '+e(part.quantity)+' '+e(part.items?.uom)+'</li>').join('')+'</ul>' : '')+
+    '<h3 class="section-gap">After photos <small class="meta">Optional</small></h3>'+photoGallery(data.media,'completion')+'</section>'+
     '<section class="panel"><div class="section-title"><h2>Payments and billing</h2>'+(canCollect ? btn('Receive payment','receive-payment') : '')+'</div>'+financialSummary(data)+receiptHistory(data.payments,data.media)+'<div class="actions"><a class="action-link" href="'+e(customerUrl.href)+'" target="_blank" rel="noopener noreferrer">Customer view</a>'+btn('Copy customer link','copy-customer-link',true)+'</div><p class="meta section-gap">The customer needs this private link and their registered mobile number to view photos and receipts.</p></section>';
-  $('copy-customer-link').onclick=async()=>{try{await navigator.clipboard.writeText(customerUrl.href);notice('Customer link copied');}catch{notice('Open Customer view and copy its address to share the private link.');}};
+  $('content').innerHTML='<section class="panel"><div class="section-title"><h2>'+e(t.appliance)+' · '+e(t.brand)+'</h2>'+statusBadge(t.status)+'</div><p>'+e(t.customer_name)+'</p><p class="preserve-lines">'+e(t.issue)+'</p><div class="actions"><a class="action-link" href="tel:+91'+e(t.mobile)+'">Call '+e(t.mobile)+'</a><a class="action-link" target="_blank" rel="noopener noreferrer" href="'+e(mapsLink(t))+'">Directions</a></div><dl class="ticket-facts">'+detail('Service address',[t.service_address,t.locality,t.city].filter(Boolean).join(', '))+detail('Service type',t.service_type)+detail('Source',t.intake_source)+detail('Created',date(t.created_at))+'</dl><div class="actions" id="repair-actions"></div></section>'+sections;
+  if($('copy-customer-link'))$('copy-customer-link').onclick=async()=>{try{await navigator.clipboard.writeText(customerUrl.href);notice('Customer link copied');}catch{notice('Open Customer view and copy its address to share the private link.');}};
   if(canCollect)$('receive-payment').onclick=()=>receivePaymentModal(data);
-  if(assigned && open){
-    if(t.status !== 'Assigned'){
-      $('repair-actions').innerHTML=btn(t.status === 'Awaiting Parts' ? 'Resume repair' : 'Awaiting parts','change-progress',true)+btn('Complete repair','complete-repair');
-      $('change-progress').onclick=async event=>{
-        const button=event.currentTarget;button.disabled=true;
-        try{await request('status',{id:t.id,status:t.status === 'Awaiting Parts' ? 'In Progress' : 'Awaiting Parts'});await load();}catch(error){notice(error.message);button.disabled=false;}
-      };
-      $('complete-repair').onclick=async event=>{
-        const button=event.currentTarget;button.disabled=true;
-        try{const catalog=await request('parts',{id:t.id});completionReview(t,catalog,data.media);}catch(error){notice(error.message);}finally{button.disabled=false;}
-      };
-    }
-    submit($('inspection-form'),async values=>{await request('inspection',{id:t.id,notes:values.notes});notice('Inspection saved');await load();});
+  if(assigned && t.status === 'Assigned'){
+    $('repair-actions').innerHTML=btn('Start inspection','start-inspection');
+    $('start-inspection').onclick=async event=>{
+      const button=event.currentTarget;button.disabled=true;
+      try{await request('inspection',{id:t.id,step:'start',notes:''});await load();}catch(error){notice(error.message);button.disabled=false;}
+    };
   }
-  if(assigned || user.role === 'manager')for(const stage of ['inspection','completion']){
-    mountPhotoControls($(stage+'-photos'),{ticketId:t.id,stage,request,onUploaded:load,onError:notice});
+  if(assigned && inspecting){
+    const form=$('inspection-form');
+    // Preserve unsaved comments when a photo finishes uploading.
+    mountPhotoControls($('inspection-photos'),{ticketId:t.id,stage:'inspection',request,onError:notice,onBusy:busy=>{for(const button of form.querySelectorAll('button'))button.disabled=busy;},onUploaded:async()=>{
+      const latest=await request('ticketDetail',{id:t.id});
+      $('inspection-gallery').innerHTML=photoGallery(latest.media,'inspection');
+    }});
+    form.addEventListener('submit',event=>{form.dataset.step=event.submitter?.name === 'finish_inspection' ? 'complete' : 'save';});
+    submit(form,async values=>{await request('inspection',{id:t.id,step:form.dataset.step,notes:values.notes});notice(form.dataset.step === 'complete' ? 'Inspection completed' : 'Comments saved');await load();});
+  }
+  if(assigned && ['Inspection Complete','Awaiting Parts'].includes(t.status)){
+    $('repair-actions').innerHTML=(t.status === 'Inspection Complete' ? btn('Awaiting parts','change-progress',true) : '')+btn('Complete repair','complete-repair');
+    if($('change-progress'))$('change-progress').onclick=async event=>{
+      const button=event.currentTarget;button.disabled=true;
+      try{await request('status',{id:t.id,status:'Awaiting Parts'});await load();}catch(error){notice(error.message);button.disabled=false;}
+    };
+    $('complete-repair').onclick=async event=>{
+      const button=event.currentTarget;button.disabled=true;
+      try{const catalog=await request('parts',{id:t.id});completionReview(t,catalog,data.media);}catch(error){notice(error.message);}finally{button.disabled=false;}
+    };
   }
 }
 
 function completionReview(ticket,catalog,media) {
   const form=editableLines('Complete repair · #'+ticket.ticket_number,catalog.items,catalog.parts,false,async(parts,values)=>{
-    await request('completeRepair',{id:ticket.id,parts,notes:values.notes,test_result:values.test_result});
+    await request('completeRepair',{id:ticket.id,parts,notes:values.notes});
     return 'Repair completed. You can now receive payment.';
-  },'<label>Work performed<textarea name="notes" required maxlength="2000" rows="3">'+e(ticket.completion_notes)+'</textarea></label><label>Test result<textarea name="test_result" required maxlength="1000" rows="2" placeholder="For example: cooling checked and working normally">'+e(ticket.test_result)+'</textarea></label><h3>After photos <small class="meta">Optional</small></h3><div id="completion-review-gallery">'+photoGallery(media,'completion')+'</div><div id="completion-review-photos"></div><h3>Parts used</h3>','Complete repair');
+  },'<label>Work performed<textarea name="notes" required maxlength="2000" rows="3">'+e(ticket.completion_notes)+'</textarea></label><h3>After photos <small class="meta">Optional</small></h3><div id="completion-review-photos"></div><div id="completion-review-gallery">'+photoGallery(media,'completion')+'</div><h3>Parts used</h3>','Complete repair');
   mountPhotoControls(form.querySelector('#completion-review-photos'),{ticketId:ticket.id,stage:'completion',request,onError:notice,onUploaded:async()=>{
     const latest=await request('ticketDetail',{id:ticket.id});
     form.querySelector('#completion-review-gallery').innerHTML=photoGallery(latest.media,'completion');
@@ -327,11 +345,13 @@ function completionReview(ticket,catalog,media) {
 
 function receivePaymentModal(data) {
   const key=crypto.randomUUID(),ticket=data.ticket;
-  let signatureId=null,proofId=null,selectedProof=null;
+  let signatureId=null,proofId=null,selectedProof=null,proofPreviewUrl=null;
+  const clearPreview=()=>{if(proofPreviewUrl)URL.revokeObjectURL(proofPreviewUrl);proofPreviewUrl=null;};
+  $('dialog').addEventListener('close',clearPreview,{once:true});
   const form=modal('Receive payment · #'+ticket.ticket_number,
     input('Amount received (₹)','amount','type="number" min="0.01" max="'+e(data.invoice ? data.remaining : 9999999)+'" step="0.01" required '+(data.invoice ? 'value="'+e(data.remaining)+'"' : ''))+
     select('Payment method','method',['Cash','UPI'])+
-    '<section id="upi-proof" hidden>'+input('UPI transaction reference (optional)','reference','maxlength="100"')+input('Payment screenshot or photo (optional)','proof','type="file" accept="image/jpeg,image/png,image/webp"')+btn('Take payment photo','take-payment-photo',true)+'<input name="proof_camera" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden><p id="proof-selection" class="meta"></p><p class="meta">Choose a screenshot, or use the camera on your phone. Confirm receipt in your payment account.</p></section>'+
+    '<section id="upi-proof" hidden><p class="field-caption">Payment photo or screenshot <span class="required-mark">*</span></p><div class="actions photo-actions"><button type="button" id="take-payment-photo" class="secondary icon-button" aria-label="Take payment photo" title="Take payment photo">'+cameraIcon+'</button>'+btn('Upload photo','upload-payment-photo',true)+'</div><input name="proof" type="file" accept="image/jpeg,image/png,image/webp" hidden><input name="proof_camera" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden><p id="proof-selection" class="meta"></p><div id="proof-preview"></div><p class="meta">Attach the payment confirmation. Confirm receipt in your payment account.</p></section>'+
     '<section id="cash-ack"><p id="acknowledgement" class="cash-acknowledgement"></p><label>Customer signature<canvas id="customer-signature" aria-label="Customer signature pad"></canvas></label>'+btn('Clear signature','clear-signature',true)+'<label class="check-row"><input type="checkbox" name="cannot_sign">Customer cannot sign</label><label id="signature-reason" hidden>Reason customer cannot sign<textarea name="signature_waiver" maxlength="500" disabled></textarea></label></section>'+
     '<label class="check-row"><input type="checkbox" name="confirmed_received" required>I confirm the money has been received.</label>',
     'Save payment',async values=>{
@@ -342,11 +362,12 @@ function receivePaymentModal(data) {
         if(!blob)throw new Error('Ask the customer to sign, or record why they cannot sign.');
         signatureId=await uploadTicketMedia(request,ticket.id,'signature',blob,'customer-signature.png');
       }
+      if(!cash && !selectedProof && !proofId)throw new Error('Attach a payment photo or screenshot for UPI.');
       if(!cash && selectedProof && !proofId){
         const file=selectedProof;
         proofId=await uploadTicketMedia(request,ticket.id,'payment',await compressPhoto(file),file.name || 'upi-payment.jpg');
       }
-      const receipt=await request('receivePayment',{id:key,ticket_id:ticket.id,amount:Number(values.amount),method:values.method,reference:cash ? '' : values.reference,
+      const receipt=await request('receivePayment',{id:key,ticket_id:ticket.id,amount:Number(values.amount),method:values.method,reference:'',
         proof_media_id:cash ? null : proofId,signature_media_id:cash && !waiver ? signatureId : null,signature_waiver:waiver,confirmed_received:true});
       return 'Receipt RCPT-'+receipt.receipt_number+' saved';
     });
@@ -354,8 +375,17 @@ function receivePaymentModal(data) {
   const clear=()=>{signatureId=null;pad.clear();};
   form.querySelector('#clear-signature').onclick=clear;
   form.elements.amount.oninput=()=>{clear();form.elements.confirmed_received.checked=false;updateAck();};
-  for(const field of [form.elements.proof,form.elements.proof_camera])field.onchange=()=>{proofId=null;selectedProof=field.files[0] || null;form.querySelector('#proof-selection').textContent=selectedProof?.name || '';};
+  for(const field of [form.elements.proof,form.elements.proof_camera])field.onchange=()=>{
+    if(!field.files[0])return;
+    clearPreview();proofId=null;selectedProof=field.files[0];
+    form.querySelector('#proof-selection').textContent=selectedProof.name;
+    proofPreviewUrl=URL.createObjectURL(selectedProof);
+    const preview=document.createElement('img');preview.src=proofPreviewUrl;preview.alt='Selected UPI payment proof';preview.className='payment-preview';
+    form.querySelector('#proof-preview').replaceChildren(preview);
+    form.elements.confirmed_received.checked=false;
+  };
   form.querySelector('#take-payment-photo').onclick=()=>form.elements.proof_camera.click();
+  form.querySelector('#upload-payment-photo').onclick=()=>form.elements.proof.click();
   function updateAck(){form.querySelector('#acknowledgement').textContent='I confirm that I paid '+money(form.elements.amount.value || 0)+' in cash to Jyoti Refrigeration for ticket #'+ticket.ticket_number+'.';}
   function updateMethod(){
     const cash=form.elements.method.value === 'Cash';
@@ -781,7 +811,11 @@ function renderBilling({completed,invoices}) {
     finally { button.disabled = false; button.textContent = 'Review invoice'; }
   };
   for (const button of $('content').querySelectorAll('[data-invoice-print]')) button.onclick = () => printInvoice(invoices.find(b=>b.id===button.dataset.invoicePrint));
-  for (const button of $('content').querySelectorAll('[data-invoice-pay]')) button.onclick = () => paymentModal(invoices.find(b=>b.id===button.dataset.invoicePay),'invoice_id');
+  for (const button of $('content').querySelectorAll('[data-invoice-pay]')) button.onclick = async () => {
+    button.disabled=true;
+    try{const bill=invoices.find(b=>b.id===button.dataset.invoicePay);receivePaymentModal(await request('ticketDetail',{id:bill.ticket_id}));}
+    catch(error){notice(error.message);}finally{button.disabled=false;}
+  };
 }
 
 window.addEventListener('popstate',()=>{

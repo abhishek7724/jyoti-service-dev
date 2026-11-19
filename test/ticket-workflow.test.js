@@ -13,12 +13,15 @@ const call=async(action,input,authorized=false)=>{
  const res={setHeader(){},status(code){this.code=code;return this;},json(value){this.body=value;}};
  await handler(req,res);return res;
 };
-test('completion requires parts, work performed and test result; collection requires confirmed receipt',()=>{
- const completion={id,parts:[{item_id:other,quantity:1}],notes:'Fixed',test_result:'Cooling checked'};
+test('completion requires parts and work performed without a test result; UPI requires proof',()=>{
+ const completion={id,parts:[{item_id:other,quantity:1}],notes:'Fixed'};
  assert.equal(forms.completion.safeParse(completion).success,true);
- for(const invalid of [{parts:[]},{notes:''},{test_result:''}])assert.equal(forms.completion.safeParse({...completion,...invalid}).success,false);
+ for(const invalid of [{parts:[]},{notes:''}])assert.equal(forms.completion.safeParse({...completion,...invalid}).success,false);
  const payment={id,ticket_id:other,amount:2500,method:'Cash',confirmed_received:true};
  assert.equal(forms.collection.safeParse(payment).success,true);
+ assert.equal(forms.collection.safeParse({...payment,method:'UPI'}).success,false);
+ assert.equal(forms.collection.safeParse({...payment,method:'UPI',proof_media_id:id}).success,true);
+ assert.equal(forms.inspection.safeParse({id,step:'complete',notes:''}).success,true);
  for(const invalid of [{amount:0},{amount:2500.001},{confirmed_received:false},{method:'Credit'}])assert.equal(forms.collection.safeParse({...payment,...invalid}).success,false);
 });
 test('image uploads are restricted to real supported formats and assigned staff',()=>{
@@ -74,7 +77,7 @@ test('repair/payment endpoints carry the authenticated technician to atomic RPCs
   if(u.pathname==='/rest/v1/staff')return Response.json([{user_id:id,name:'Tech',role:'technician'}]);
   last=JSON.parse(init.body);return Response.json({receipt_number:1001,status:'Repair Complete'});
  };
- assert.equal((await call('completeRepair',{id:other,parts:[{item_id:id,quantity:1}],notes:'Fixed',test_result:'Passed'},true)).code,200);
+ assert.equal((await call('completeRepair',{id:other,parts:[{item_id:id,quantity:1}],notes:'Fixed'},true)).code,200);
  assert.equal(last.p_user,id);assert.equal(last.p_ticket,other);
  assert.equal((await call('receivePayment',{id,ticket_id:other,amount:2500,method:'Cash',signature_waiver:'Unable to sign',confirmed_received:true},true)).code,200);
  assert.equal(last.p_user,id);assert.equal(last.p_amount,2500);
@@ -103,4 +106,30 @@ test('private customer receipt view only signs visible media after link and phon
  };
  const result=await call('track',{ticket:'10001',mobile:'9000000000',access:other});
  assert.equal(result.code,200);assert.equal(result.body.result.collected,2500);assert.equal(result.body.result.customer_view_key,undefined);assert.equal(result.body.result.id,undefined);
+});
+
+test('inspection media is unavailable before inspection and completion media before inspection completes',()=>{
+ const staff={role:'technician',user_id:id};
+ assert.throws(()=>canUpload(staff,{assigned_to:id,status:'Assigned'},'inspection'),/Start the inspection/);
+ assert.throws(()=>canUpload(staff,{assigned_to:id,status:'In Progress'},'completion'),/Complete the inspection/);
+ canUpload(staff,{assigned_to:id,status:'In Progress'},'inspection');
+ canUpload(staff,{assigned_to:id,status:'Inspection Complete'},'completion');
+});
+test('inspection steps pass the authenticated identity and legacy invoice payment cannot bypass proof',async()=>{
+ let rpc;
+ globalThis.fetch=async(url,init)=>{
+  const u=new URL(url);
+  if(u.pathname==='/auth/v1/user')return Response.json({id});
+  if(u.pathname==='/rest/v1/staff')return Response.json([{user_id:id,name:'Manager',role:'manager'}]);
+  throw Error('Unexpected database operation '+u.pathname);
+ };
+ assert.equal((await call('payment',{id,invoice_id:other,amount:100,method:'UPI'},true)).code,422);
+ globalThis.fetch=async(url,init)=>{
+  const u=new URL(url);
+  if(u.pathname==='/auth/v1/user')return Response.json({id});
+  if(u.pathname==='/rest/v1/staff')return Response.json([{user_id:id,name:'Tech',role:'technician'}]);
+  assert.equal(u.pathname,'/rest/v1/rpc/advance_ticket_inspection');rpc=JSON.parse(init.body);return Response.json(null);
+ };
+ assert.equal((await call('inspection',{id:other,step:'complete',notes:'Checked cooling'},true)).code,200);
+ assert.equal(rpc.p_action,'complete');assert.equal(rpc.p_user,id);
 });

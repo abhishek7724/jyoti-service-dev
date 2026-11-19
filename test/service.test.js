@@ -92,13 +92,13 @@ test('ticket dashboard filters Billed and Paid and keeps settled tickets out of 
     queries.push(target.searchParams);
     return Response.json([]);
   };
-  for (const status of ['Paid, not billed','Billed','Paid']) {
+  for (const status of ['Inspection Complete','Paid, not billed','Billed','Paid']) {
     const result = await request('dashboard',{status},{authorization:'Bearer test-token'});
     assert.equal(result.status,200);
     assert.equal(queries.at(-1).get('status'),'eq.'+status);
   }
   assert.equal((await request('dashboard',{openOnly:true},{authorization:'Bearer test-token'})).status,200);
-  assert.equal(queries.at(-1).get('status'),'in.(New,Assigned,In Progress,Awaiting Parts)');
+  assert.equal(queries.at(-1).get('status'),'in.(New,Assigned,In Progress,Inspection Complete,Awaiting Parts)');
 });
 
 test('item master pages are limited to 50 and search includes code, description, brand and model',async () => {

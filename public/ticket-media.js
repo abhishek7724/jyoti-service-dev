@@ -1,3 +1,5 @@
+export const cameraIcon = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M8 5l1.5-2h5L16 5h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/><circle cx="12" cy="13" r="4"/></svg>';
+
 export async function compressPhoto(file) {
   const image = new Image();
   const url = URL.createObjectURL(file);
@@ -27,8 +29,8 @@ export async function uploadTicketMedia(request,ticketId,stage,blob,fileName) {
   return mediaId;
 }
 
-export function mountPhotoControls(container,{ticketId,stage,request,onUploaded,onError}) {
-  container.innerHTML = '<div class="actions"><button type="button" class="secondary" data-camera>Take photo</button><button type="button" class="secondary" data-gallery>Choose photos</button></div><p class="meta" role="status"></p>';
+export function mountPhotoControls(container,{ticketId,stage,request,onUploaded,onError,onBusy=()=>{}}) {
+  container.innerHTML = '<div class="actions photo-actions"><button type="button" class="secondary icon-button" data-camera aria-label="Take photo" title="Take photo">'+cameraIcon+'</button><button type="button" class="secondary" data-gallery>Upload photo</button></div><p class="meta" role="status"></p>';
   const status = container.querySelector('[role="status"]');
   for (const [selector,camera] of [['[data-camera]',true],['[data-gallery]',false]]) {
     const input = document.createElement('input');
@@ -38,6 +40,7 @@ export function mountPhotoControls(container,{ticketId,stage,request,onUploaded,
     container.querySelector(selector).onclick=()=>input.click();
     input.onchange=async()=>{
       let uploaded=0;
+      onBusy(true);
       const buttons=[...container.querySelectorAll('button'),...container.closest('form')?.querySelectorAll('button:not([type="button"])') || []];
       buttons.forEach(button=>{button.disabled=true;});
       try {
@@ -50,7 +53,8 @@ export function mountPhotoControls(container,{ticketId,stage,request,onUploaded,
       } catch(error) {status.textContent=error.message;onError(error.message);}
       finally {
         buttons.forEach(button=>{button.disabled=false;});input.value='';
-        if(uploaded) {try {await onUploaded();}catch(error){status.textContent=error.message;onError(error.message);}}
+        if(uploaded) {try {await onUploaded();status.textContent=uploaded === 1 ? 'Photo uploaded' : uploaded+' photos uploaded';}catch(error){status.textContent=error.message;onError(error.message);}}
+        onBusy(false);
       }
     };
   }

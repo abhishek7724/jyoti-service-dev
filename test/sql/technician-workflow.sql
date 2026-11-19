@@ -18,7 +18,13 @@ begin
  select value into n from generate_series(99999,99000,-1) value where not exists(select 1 from public.service_tickets where ticket_number=value) limit 1;
  insert into public.service_tickets(id,ticket_number,customer_name,mobile,locality,service_address,appliance,brand,service_type,issue,status,assigned_to,created_by) overriding system value
  values(ticket,n,'Workflow fixture','9999999999','Test','Test','Test','Test','Bring to Shop','Test','Assigned',technician,null);
- perform public.save_ticket_inspection(ticket,technician,'Checked compressor');
+ begin
+  perform public.advance_ticket_inspection(ticket,technician,'complete','Skip start');
+  raise exception 'Regression: inspection skipped start';
+ exception when raise_exception then if sqlerrm<>'Start inspection before saving comments or completing it' then raise;end if;end;
+ perform public.advance_ticket_inspection(ticket,technician,'start','');
+ perform public.advance_ticket_inspection(ticket,technician,'start','');
+ perform public.advance_ticket_inspection(ticket,technician,'save','Checked compressor');
  if not exists(select 1 from public.service_tickets where id=ticket and status='In Progress' and inspected_at is not null)then raise exception 'Inspection did not start repair';end if;
  begin
   perform public.complete_service_ticket(ticket,technician,'[]','Fixed','Tested');
@@ -30,11 +36,18 @@ begin
   raise exception 'Regression: wrong technician completed ticket';
  exception when raise_exception then if sqlerrm<>'Only the assigned technician can complete the repair' then raise;end if;end;
  begin
-  perform public.complete_service_ticket(ticket,technician,inputs,'Fixed','');
+  perform public.complete_service_ticket(ticket,technician,inputs,'','');
   raise exception 'Regression: missing test accepted';
- exception when raise_exception then if sqlerrm<>'Add the work performed and test result' then raise;end if;end;
- perform public.complete_service_ticket(ticket,technician,inputs,'Replaced compressor','Cooling checked');
- perform public.complete_service_ticket(ticket,technician,inputs,'Replaced compressor','Cooling checked');
+ exception when raise_exception then if sqlerrm<>'Add the work performed' then raise;end if;end;
+ begin
+  perform public.complete_service_ticket(ticket,technician,inputs,'Fixed','');
+  raise exception 'Regression: repair skipped inspection completion';
+ exception when raise_exception then if sqlerrm<>'Complete the inspection before completing the repair' then raise;end if;end;
+ perform public.advance_ticket_inspection(ticket,technician,'complete','Checked compressor');
+ if not exists(select 1 from public.service_tickets where id=ticket and status='Inspection Complete' and inspection_completed_at is not null)then raise exception 'Inspection milestone missing';end if;
+ update public.service_tickets set status='Awaiting Parts' where id=ticket;
+ perform public.complete_service_ticket(ticket,technician,inputs,'Replaced compressor','');
+ perform public.complete_service_ticket(ticket,technician,inputs,'Replaced compressor','');
  if not exists(select 1 from public.service_tickets where id=ticket and status='Repair Complete' and completed_at is not null)then raise exception 'Completion did not save review';end if;
  begin
   perform public.receive_ticket_payment(payment,ticket,technician,2500,'Cash','',null,null,'');
@@ -57,14 +70,20 @@ begin
   perform public.receive_ticket_payment(gen_random_uuid(),ticket,technician,501,'UPI','',proof,null,'');
   raise exception 'Regression: overpayment accepted';
  exception when raise_exception then if sqlerrm<>'Amount exceeds the outstanding balance' then raise;end if;end;
- perform public.receive_ticket_payment(gen_random_uuid(),ticket,technician,500,'UPI','test-reference',proof,null,'');
+ begin
+  perform public.receive_ticket_payment(gen_random_uuid(),ticket,technician,500,'UPI','',null,null,'');
+  raise exception 'Regression: UPI without proof accepted';
+ exception when raise_exception then if sqlerrm<>'Attach a payment photo or screenshot for UPI' then raise;end if;end;
+ perform public.receive_ticket_payment(gen_random_uuid(),ticket,technician,500,'UPI','',proof,null,'');
  if not exists(select 1 from public.service_tickets where id=ticket and status='Paid')then raise exception 'Settlement did not mark paid';end if;
  -- A second ticket covers excess collected before its final invoice and a cash signature waiver.
  ticket:=gen_random_uuid();payment:=gen_random_uuid();
  select value into n from generate_series(99999,99000,-1) value where not exists(select 1 from public.service_tickets where ticket_number=value) limit 1;
  insert into public.service_tickets(id,ticket_number,customer_name,mobile,locality,service_address,appliance,brand,service_type,issue,status,assigned_to,created_by) overriding system value
  values(ticket,n,'Excess fixture','9999999999','Test','Test','Test','Test','Bring to Shop','Test','Assigned',technician,null);
- perform public.complete_service_ticket(ticket,technician,inputs,'Fixed','Tested');
+ perform public.advance_ticket_inspection(ticket,technician,'start','');
+ perform public.advance_ticket_inspection(ticket,technician,'complete','Inspection done');
+ perform public.complete_service_ticket(ticket,technician,inputs,'Fixed','');
  perform public.receive_ticket_payment(payment,ticket,technician,2500,'Cash','',null,null,'Customer hand injury');
  bill:=public.issue_discounted_service_invoice(ticket,500,0,'','{"name":"JYOTI REFRIGERATION."}',900000,jsonb_build_array(jsonb_build_object('item_id',item,'price',1500)),'none',0);
  if bill.total<>2000 or not exists(select 1 from public.service_tickets where id=ticket and status='Paid')then raise exception 'Excess collection status incorrect';end if;

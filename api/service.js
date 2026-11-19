@@ -84,7 +84,7 @@ async function publicAction(action, req, input) {
     await rateLimit(db, req, 'track-ticket', 12, number);
     if (!input.access) return read(db.from('service_tickets').select('status').eq('ticket_number',Number(number)).eq('mobile',phone).maybeSingle());
     const access = parse(uuid,input.access);
-    const customerTicket = await read(db.from('service_tickets').select('id,ticket_number,customer_name,appliance,brand,status,inspection_notes,completion_notes,test_result')
+    const customerTicket = await read(db.from('service_tickets').select('id,ticket_number,customer_name,appliance,brand,status,inspection_notes,completion_notes')
       .eq('ticket_number',Number(number)).eq('mobile',phone).eq('customer_view_key',access).maybeSingle());
     if (!customerTicket) return null;
     const {id,...details} = customerTicket;
@@ -151,12 +151,12 @@ async function staffAction(action, req, input) {
     const offset = Number.isInteger(input.offset) && input.offset >= 0 && input.offset <= 15000 ? input.offset : 0;
     let query = userDb.from('service_tickets').select(fields).order('created_at', { ascending: false }).order('id').range(offset, offset + limit - 1);
     if (input.status !== undefined) {
-      if (!['New','Assigned','In Progress','Awaiting Parts','Repair Complete','Paid, not billed','Billed','Paid'].includes(input.status)) {
+      if (!['New','Assigned','In Progress','Inspection Complete','Awaiting Parts','Repair Complete','Paid, not billed','Billed','Paid'].includes(input.status)) {
         throw new HttpError(422, 'Choose a valid ticket status');
       }
       query = query.eq('status',input.status);
     } else if (input.openOnly === true) {
-      query = query.in('status',['New','Assigned','In Progress','Awaiting Parts']);
+      query = query.in('status',['New','Assigned','In Progress','Inspection Complete','Awaiting Parts']);
     }
     if (input.ticket !== undefined && input.ticket !== '') {
       if (!/^[1-9][0-9]{4}$/.test(String(input.ticket))) throw new HttpError(422, 'Enter a five-digit ticket number');
@@ -176,13 +176,13 @@ async function staffAction(action, req, input) {
   if (action === 'inspection') {
     requireRole(staff,'technician');
     const data = parse(forms.inspection,input);
-    await read(db.rpc('save_ticket_inspection',{p_ticket:data.id,p_user:staff.user_id,p_notes:data.notes}));
+    await read(db.rpc('advance_ticket_inspection',{p_ticket:data.id,p_user:staff.user_id,p_action:data.step,p_notes:data.notes}));
     return {saved:true};
   }
   if (action === 'completeRepair') {
     requireRole(staff,'technician');
     const data = parse(forms.completion,input);
-    return read(db.rpc('complete_service_ticket',{p_ticket:data.id,p_user:staff.user_id,p_parts:data.parts,p_notes:data.notes,p_test:data.test_result}));
+    return read(db.rpc('complete_service_ticket',{p_ticket:data.id,p_user:staff.user_id,p_parts:data.parts,p_notes:data.notes,p_test:''}));
   }
   if (action === 'receivePayment') {
     const data = parse(forms.collection,input);
@@ -312,6 +312,7 @@ async function staffAction(action, req, input) {
     }
     case 'payment': {
       const p = parse(forms.payment,input);
+      if(p.invoice_id)throw new HttpError(422,'Open Receive payment on the ticket to record a customer payment with its acknowledgement or UPI proof');
       return read(db.rpc('record_payment',{p_id:p.id,p_invoice:p.invoice_id,p_bill:p.supplier_bill_id,p_amount:p.amount,p_method:p.method,p_reference:p.reference}));
     }
     default: throw new HttpError(404,'Unknown action');
