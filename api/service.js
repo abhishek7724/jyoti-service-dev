@@ -219,11 +219,8 @@ async function staffAction(action, req, input) {
     requireRole(staff, 'manager');
     const key = parse(uuid,input.key);
     if (!['Walk-in','Phone'].includes(input.intake_source)) throw new HttpError(422, 'Choose phone or walk-in');
-    const details = parse(ticket,input);
-    if (details.service_type === 'Home Visit' && details.latitude === null && !details.maps_url) {
-      throw new HttpError(422, 'Add a location pin for the home visit');
-    }
-    details.maps_url = optionalMaps(details.maps_url);
+    // Shop staff book against the customer's address, not the shop device's location.
+    const details = parse(ticket,{...input,latitude:null,longitude:null,maps_url:null});
     const existing = () => read(db.from('service_tickets').select('ticket_number').eq('intake_key',key).eq('created_by',staff.user_id).maybeSingle());
     const prior = await existing();
     if (prior) return prior;

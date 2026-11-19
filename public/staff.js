@@ -407,7 +407,6 @@ function receivePaymentModal(data) {
 
 function newTicket() {
   const key = crypto.randomUUID();
-  let coordinates = {};
   const form = modal('New service ticket',
     '<div class="pair">'+input('Customer name','customer_name','required maxlength="100"')+
     input('Mobile number','mobile','required inputmode="numeric" type="tel" pattern="[6-9][0-9]{9}" maxlength="10"')+
@@ -418,11 +417,9 @@ function newTicket() {
     select('Service type','service_type',['Bring to Shop','Home Visit','Home Pickup','Installation','Preventive Maintenance','Warranty Service'])+
     select('Complaint source','intake_source',['Walk-in','Phone'])+'</div>'+
     '<label>Service address<textarea name="service_address" required maxlength="500"></textarea></label>'+
-    '<label>Issue<textarea name="issue" required maxlength="2000"></textarea></label>'+
-    '<div id="ticket-location" hidden>'+btn('Capture current location','capture',true)+
-    input('Google Maps share link','maps_url','type="url"')+'<p id="pin-status" role="status"></p></div>',
+    '<label>Issue<textarea name="issue" required maxlength="2000"></textarea></label>',
     'Register complaint',async data => {
-      const result = await request('createTicket',{...data,...coordinates,key,maps_url:data.maps_url || null});
+      const result = await request('createTicket',{...data,key});
       return 'Ticket #'+result.ticket_number+' registered';
     });
   attachSuggestions(form,'locality',localityOptions);
@@ -439,18 +436,6 @@ function newTicket() {
       }
     } catch {}
   });
-  form.elements.service_type.onchange = () => {
-    $('ticket-location').hidden = !['Home Visit','Home Pickup','Installation'].includes(form.elements.service_type.value);
-    if ($('ticket-location').hidden) {coordinates = {};form.elements.maps_url.value = '';$('pin-status').textContent = '';}
-  };
-  $('capture').onclick = () => {
-    if (!navigator.geolocation) { $('pin-status').textContent = 'Paste a Google Maps link for the service address.'; return; }
-    $('pin-status').textContent = 'Getting your location…';
-    navigator.geolocation.getCurrentPosition(({coords}) => {
-      coordinates = {latitude:coords.latitude,longitude:coords.longitude};
-      $('pin-status').textContent = 'Location pinned';
-    }, () => { $('pin-status').textContent = 'Location was unavailable. Paste a Maps link instead.'; }, {enableHighAccuracy:true,timeout:10000});
-  };
 }
 
 function newStaff() {

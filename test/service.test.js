@@ -132,3 +132,30 @@ test('item customer price is optional and brand and model remain optional',() =>
   assert.equal(forms.item.safeParse({...item,sale_price:-1}).success,false);
   assert.equal(forms.item.parse({...item,brand:'LG',model:'ABC-01'}).model,'ABC-01');
 });
+
+test('manager home-visit booking uses the customer address without shop-device coordinates',async () => {
+  let saved;
+  globalThis.fetch = async (url,init) => {
+    const target = new URL(url);
+    if (target.pathname === '/auth/v1/user') return Response.json({id:key});
+    if (target.pathname === '/rest/v1/staff') return Response.json([{user_id:key,name:'Test Manager',role:'manager'}]);
+    assert.equal(target.pathname,'/rest/v1/service_tickets');
+    if (init.method !== 'POST') return Response.json([]);
+    saved = JSON.parse(init.body);
+    return Response.json({ticket_number:10008});
+  };
+  const booking = {key,customer_name:'Test customer',mobile:'9000000000',locality:'Godhanpur',
+    service_address:'Near ATM',appliance:'Air Conditioner',brand:'LG',service_type:'Home Visit',
+    intake_source:'Phone',issue:'Not cooling'};
+  assert.equal((await request('createTicket',booking,{authorization:'Bearer test-token'})).status,200);
+  assert.equal(saved.service_address,'Near ATM');
+  assert.equal(saved.locality,'Godhanpur');
+  assert.equal(saved.latitude,null);
+  assert.equal(saved.longitude,null);
+  assert.equal(saved.maps_url,null);
+  // Cached clients cannot accidentally save the manager's shop location either.
+  assert.equal((await request('createTicket',{...booking,latitude:23.1,longitude:83.2,maps_url:'https://maps.google.com/?q=shop'},
+    {authorization:'Bearer test-token'})).status,200);
+  assert.equal(saved.latitude,null);
+  assert.equal(saved.maps_url,null);
+});
