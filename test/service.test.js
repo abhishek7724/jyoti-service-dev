@@ -159,3 +159,18 @@ test('manager home-visit booking uses the customer address without shop-device c
   assert.equal(saved.latitude,null);
   assert.equal(saved.maps_url,null);
 });
+
+test('awaiting ticket dashboard includes its existing PO so creation can be disabled',async()=>{
+  globalThis.fetch=async url=>{
+    const u=new URL(url);
+    if(u.pathname==='/auth/v1/user')return Response.json({id:key});
+    if(u.pathname==='/rest/v1/staff')return Response.json(u.searchParams.get('select').includes('role') ? [{user_id:key,name:'Manager',role:'manager'}] : []);
+    if(u.pathname==='/rest/v1/service_tickets')return Response.json([{id:key,ticket_number:10008,status:'Awaiting Parts'}]);
+    if(u.pathname==='/rest/v1/ticket_required_parts')return Response.json([]);
+    assert.equal(u.pathname,'/rest/v1/purchase_orders');
+    assert.equal(u.searchParams.get('ticket_id'),'in.('+key+')');
+    return Response.json([{ticket_id:key,po_number:10001}]);
+  };
+  const result=await request('dashboard',{}, {authorization:'Bearer test-token'});
+  assert.equal(result.status,200);assert.equal(result.body.result.tickets[0].purchase_order.po_number,10001);
+});

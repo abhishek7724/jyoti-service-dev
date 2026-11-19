@@ -145,8 +145,11 @@ async function staffAction(action, req, input) {
     ]);
     const waiting=tickets.filter(ticket=>ticket.status === 'Awaiting Parts');
     if(waiting.length){
-      const required=await read(db.from('ticket_required_parts').select('ticket_id,item_id,quantity,items(code,description,uom)').in('ticket_id',waiting.map(ticket=>ticket.id)));
-      for(const ticket of waiting)ticket.ticket_required_parts=required.filter(part=>part.ticket_id===ticket.id);
+      const [required,orders]=await Promise.all([
+        read(db.from('ticket_required_parts').select('ticket_id,item_id,quantity,items(code,description,uom)').in('ticket_id',waiting.map(ticket=>ticket.id))),
+        staff.role === 'manager' ? read(db.from('purchase_orders').select('ticket_id,po_number').in('ticket_id',waiting.map(ticket=>ticket.id))) : [],
+      ]);
+      for(const ticket of waiting){ticket.ticket_required_parts=required.filter(part=>part.ticket_id===ticket.id);ticket.purchase_order=orders.find(order=>order.ticket_id===ticket.id) || null;}
     }
     return { staff, tickets, technicians, limit, pushKey: staff.role === 'technician' && process.env.WEB_PUSH_PRIVATE_KEY && process.env.WEB_PUSH_SUBJECT ? process.env.WEB_PUSH_PUBLIC_KEY || '' : '' };
   }

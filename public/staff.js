@@ -268,7 +268,7 @@ function renderTickets({tickets,technicians,pushKey,limit}) {
       if(user.role === 'technician' && t.status === 'Assigned')actions.push(assignmentButtons(t));
       const awaitingParts = t.status === 'Awaiting Parts';
       if (user.role === 'manager' && awaitingParts) {
-        actions.push('<button type="button" class="secondary" data-ticket-po="'+e(t.id)+'">Create PO</button>');
+        actions.push(t.purchase_order ? '<button type="button" class="secondary" disabled title="A purchase order already exists for this ticket">PO #'+e(t.purchase_order.po_number)+' created</button>' : '<button type="button" class="secondary" data-ticket-po="'+e(t.id)+'">Create PO</button>');
       }
       actions.push('<button type="button" class="secondary" data-ticket-detail="'+e(t.id)+'" data-ticket-number="'+t.ticket_number+'">View details</button>');
       return '<article class="panel ticket-card"'+(awaitingParts?' style="background:#fff1f2;border-color:#fca5a5"':'')+'><div class="section-title"><h2>#'+t.ticket_number+' · '+e(t.appliance)+'</h2>'+statusBadge(t.status)+'</div>'+
