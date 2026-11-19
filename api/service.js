@@ -3,6 +3,8 @@ import { sendNotification } from 'web-push';
 import { HttpError, clients, read, requireRole, staffSession } from '../lib/db.js';
 import { forms, mobile, staffEmail, ticket, uuid, validatePushEndpoint } from '../lib/validation.js';
 
+import {accessibleTicket, ticketEvidence, createMediaUpload, finalizeMedia} from '../lib/ticket-workflow.js';
+
 const financeRoles = ['manager', 'billing'];
 const publicActions = ['submit','track','login','refresh'];
 const fields = 'id,ticket_number,customer_name,mobile,locality,city,service_address,appliance,brand,service_type,issue,latitude,longitude,maps_url,assigned_to,status,created_at,intake_source,parts_reviewed';
@@ -80,21 +82,27 @@ async function publicAction(action, req, input) {
     const number = String(input.ticket);
     if (!/^[1-9][0-9]{4}$/.test(number)) throw new HttpError(422, 'Enter a five-digit ticket number');
     await rateLimit(db, req, 'track-ticket', 12, number);
-    return read(db.from('service_tickets').select('status').eq('ticket_number', Number(number)).eq('mobile', phone).maybeSingle());
+    if (!input.access) return read(db.from('service_tickets').select('status').eq('ticket_number',Number(number)).eq('mobile',phone).maybeSingle());
+    const access = parse(uuid,input.access);
+    const customerTicket = await read(db.from('service_tickets').select('id,ticket_number,customer_name,appliance,brand,status,inspection_notes,completion_notes,test_result')
+      .eq('ticket_number',Number(number)).eq('mobile',phone).eq('customer_view_key',access).maybeSingle());
+    if (!customerTicket) return null;
+    const {id,...details} = customerTicket;
+    return {...details,...await ticketEvidence(db,id)};
   }
   if (input.website) throw new HttpError(422, 'Could not submit the complaint');
   const details = publicTicket(input);
   const key = parse(uuid, input.key);
-  let result = await read(db.from('service_tickets').select('ticket_number').eq('intake_key', key).eq('mobile', details.mobile).maybeSingle());
+  let result = await read(db.from('service_tickets').select('ticket_number,customer_view_key').eq('intake_key', key).eq('mobile', details.mobile).maybeSingle());
   if (!result) {
     try {
-      result = await read(db.from('service_tickets').insert({ ...details, intake_key: key, intake_source: 'Website' }).select('ticket_number').single());
+      result = await read(db.from('service_tickets').insert({ ...details, intake_key: key, intake_source: 'Website' }).select('ticket_number,customer_view_key').single());
     } catch (error) {
       if (error.status !== 409) throw error;
-      result = await read(db.from('service_tickets').select('ticket_number').eq('intake_key', key).eq('mobile', details.mobile).single());
+      result = await read(db.from('service_tickets').select('ticket_number,customer_view_key').eq('intake_key', key).eq('mobile', details.mobile).single());
     }
   }
-  return { ticket: result.ticket_number };
+  return {ticket:result.ticket_number,access:result.customer_view_key};
 }
 
 async function notify(db, assignee, ticketNumber) {
@@ -131,7 +139,8 @@ function issuerDetails() {
 }
 
 async function staffAction(action, req, input) {
-  const { db, userDb, staff } = await staffSession(req);
+  const context = await staffSession(req);
+  const { db, userDb, staff } = context;
   if (action === 'logout') {
     const token = req.headers.authorization.replace(/^Bearer /i, '');
     await db.auth.admin.signOut(token, 'local');
@@ -142,7 +151,7 @@ async function staffAction(action, req, input) {
     const offset = Number.isInteger(input.offset) && input.offset >= 0 && input.offset <= 15000 ? input.offset : 0;
     let query = userDb.from('service_tickets').select(fields).order('created_at', { ascending: false }).order('id').range(offset, offset + limit - 1);
     if (input.status !== undefined) {
-      if (!['New','Assigned','In Progress','Awaiting Parts','Repair Complete','Billed','Paid'].includes(input.status)) {
+      if (!['New','Assigned','In Progress','Awaiting Parts','Repair Complete','Paid, not billed','Billed','Paid'].includes(input.status)) {
         throw new HttpError(422, 'Choose a valid ticket status');
       }
       query = query.eq('status',input.status);
@@ -159,6 +168,33 @@ async function staffAction(action, req, input) {
     ]);
     return { staff, tickets, technicians, limit, pushKey: staff.role === 'technician' && process.env.WEB_PUSH_PRIVATE_KEY && process.env.WEB_PUSH_SUBJECT ? process.env.WEB_PUSH_PUBLIC_KEY || '' : '' };
   }
+  if (action === 'ticketDetail') {
+    const id = parse(uuid,input.id);
+    const ticket = await accessibleTicket(userDb,staff,id);
+    return {staff,ticket,...await ticketEvidence(db,id)};
+  }
+  if (action === 'inspection') {
+    requireRole(staff,'technician');
+    const data = parse(forms.inspection,input);
+    await read(db.rpc('save_ticket_inspection',{p_ticket:data.id,p_user:staff.user_id,p_notes:data.notes}));
+    return {saved:true};
+  }
+  if (action === 'completeRepair') {
+    requireRole(staff,'technician');
+    const data = parse(forms.completion,input);
+    return read(db.rpc('complete_service_ticket',{p_ticket:data.id,p_user:staff.user_id,p_parts:data.parts,p_notes:data.notes,p_test:data.test_result}));
+  }
+  if (action === 'receivePayment') {
+    const data = parse(forms.collection,input);
+    return read(db.rpc('receive_ticket_payment',{p_id:data.id,p_ticket:data.ticket_id,p_user:staff.user_id,p_amount:data.amount,p_method:data.method,
+      p_reference:data.reference,p_proof:data.proof_media_id,p_signature:data.signature_media_id,p_waiver:data.signature_waiver}));
+  }
+  if (action === 'mediaUpload') {
+    const data = parse(forms.mediaUpload,input);
+    await rateLimit(db,req,'media-upload',60,staff.user_id);
+    return createMediaUpload(context,data);
+  }
+  if (action === 'mediaReady') return finalizeMedia(context,parse(forms.mediaReady,input));
   if (action === 'createStaff') {
     requireRole(staff, 'manager');
     const { username, password, name, role } = parse(forms.staff, input);
@@ -262,7 +298,7 @@ async function staffAction(action, req, input) {
         read(db.from('service_tickets').select('customer_name,service_address,locality,city,ticket_number,status').eq('id',id).single()),
         read(db.from('ticket_parts').select('item_id,quantity,items(description,uom,hsn_sac,sale_price,tax_rate)').eq('ticket_id',id)),
       ]);
-      if (booking.status !== 'Repair Complete') throw new HttpError(422,'Finish the repair before billing');
+      if (!['Repair Complete','Paid, not billed'].includes(booking.status)) throw new HttpError(422,'Finish the repair before billing');
       return { booking,parts };
     }
     case 'invoice': {
@@ -315,7 +351,7 @@ async function purchases(db) {
 
 async function billing(db) {
   const [completed,invoices] = await Promise.all([
-    read(db.from('service_tickets').select('id,ticket_number,customer_name,created_at,invoices!left(id)').eq('status','Repair Complete').is('invoices',null).order('created_at',{ascending:false})),
+    read(db.from('service_tickets').select('id,ticket_number,customer_name,created_at,payments!payments_ticket_id_fkey(amount),invoices!left(id)').in('status',['Repair Complete','Paid, not billed']).is('invoices',null).order('created_at',{ascending:false})),
     read(db.from('invoices').select('*,service_tickets(ticket_number,mobile),payments(amount,method,reference,paid_at)').order('issued_on',{ascending:false}).order('id')),
   ]);
   return { completed,invoices };

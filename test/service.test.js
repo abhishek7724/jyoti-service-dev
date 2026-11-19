@@ -36,14 +36,14 @@ test('public complaint has no login and creates only one booking on retry',async
       assert.equal(body.intake_key,key);
       assert.equal(body.maps_url,'https://maps.app.goo.gl/example');
       assert.equal(record,undefined);
-      record = {ticket_number:10001};
+      record = {ticket_number:10001,customer_view_key:key};
     }
     return Response.json(init.method === 'POST' ? record : record ? [record] : []);
   };
   const input = { name:'Test Customer',mobile:'9000000000',appliance:'Refrigerator',brand:'Other',
     service:'Home Visit',issue:'Not cooling',address:'Test Address',maps:'https://maps.app.goo.gl/example',key };
   for (const _ of [1,2]) {
-    assert.deepEqual(await request('submit',input),{status:200,body:{ok:true,result:{ticket:10001}}});
+    assert.deepEqual(await request('submit',input),{status:200,body:{ok:true,result:{ticket:10001,access:key}}});
   }
 });
 
@@ -92,7 +92,7 @@ test('ticket dashboard filters Billed and Paid and keeps settled tickets out of 
     queries.push(target.searchParams);
     return Response.json([]);
   };
-  for (const status of ['Billed','Paid']) {
+  for (const status of ['Paid, not billed','Billed','Paid']) {
     const result = await request('dashboard',{status},{authorization:'Bearer test-token'});
     assert.equal(result.status,200);
     assert.equal(queries.at(-1).get('status'),'eq.'+status);

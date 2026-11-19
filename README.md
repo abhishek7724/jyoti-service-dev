@@ -6,7 +6,10 @@ Jyoti Refrigeration's public booking page and the Jyoti Service Desk staff porta
 
 - Website customers submit without an account and track status with their mobile number and ticket number.
 - Managers register phone and walk-in complaints, create technician and billing accounts, and assign tickets directly from the list.
-- Technicians see assigned jobs, open the route in Maps, record parts used, and update progress. Compatible browsers ask for notification permission on the first use.
+- Technicians open compact assignment cards and notification links into ticket details, start an inspection, optionally attach before/after photos, and finish with required work notes, test results and at least one part used. Compatible browsers ask for notification permission on the first use.
+- After repair completion, assigned technicians and finance staff can collect Cash or UPI before invoicing. Cash uses a customer signature or a recorded reason they cannot sign; UPI can include an optional screenshot/photo and reference. Each collection has a receipt, collector and timestamp. Images are compressed on-device and kept in the private `ticket-media` bucket.
+- Pre-invoice collections show `Paid, not billed` in orange. Invoice issuance attaches those receipts automatically, showing the balance due or an excess requiring refund/credit. Ticket status follows invoices and payments.
+- The staff ticket detail provides a private customer link. Customers enter their registered mobile number to view inspection/completion photos and payment receipts. Ordinary ticket-number/mobile tracking continues to return status only. New website bookings receive their private link on confirmation. Signed image URLs expire after ten minutes; check the ticket again to refresh them.
 - Purchasing records itemized purchase orders, partial receipts, supplier bills, payments and balances.
 - Billing uses the booking's name and service address for both invoice addresses. Parts and service charges are separate lines. Documents can be printed or saved as PDF. Customer and supplier payments are entered manually.
 
@@ -28,3 +31,7 @@ If the existing GitHub Pages website stays in use after verification, retain its
 npm ci
 npm test
 ```
+
+## Technician workflow verification
+
+`test/sql/technician-workflow.sql` checks completion validation, assigned-user access, cash acknowledgements, receipt idempotency, UPI settlement, automatic invoice reconciliation and excess collections in a rollback transaction. It requires at least one active technician. Use a non-staff service-role JWT claim as supplied in the fixture so invoice notification hooks skip test invoices. Identity receipt numbers can have gaps after test rollbacks. Phone camera, signature touch input and operating-system notification behavior should also be checked on the shop’s actual phones.

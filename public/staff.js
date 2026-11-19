@@ -1,6 +1,8 @@
 import { printInvoice, printPurchase } from './documents.js';
 import { brandOptions, localityOptions, uomOptions } from './lookups.js';
 import { attachSuggestions } from './combobox.js';
+import { statusBadge,photoGallery,receiptHistory,financialSummary } from './ticket-display.js';
+import { compressPhoto,uploadTicketMedia,mountPhotoControls,signaturePad } from './ticket-media.js';
 
 const $ = (id) => document.getElementById(id);
 const e = (value) => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -21,8 +23,11 @@ const pages = { tickets:'Service tickets',items:'Item master',suppliers:'Supplie
 const originalTicket = new URL(location.href).searchParams.get('ticket') || '';
 let filter = /^[1-9][0-9]{4}$/.test(originalTicket) ? originalTicket : '';
 let ticketScope = filter ? 'all' : 'open';
-const ticketStatuses = ['New','Assigned','In Progress','Awaiting Parts','Repair Complete','Billed','Paid'];
+const ticketStatuses = ['New','Assigned','In Progress','Awaiting Parts','Repair Complete','Paid, not billed','Billed','Paid'];
 let offset = 0;
+let detailTicketId = null;
+let pendingTicketNumber = filter;
+const completedStatuses = ['Repair Complete','Paid, not billed','Billed','Paid'];
 let itemOffset = 0, itemSearch = '';
 let user, refresh, page = 'tickets', pageGeneration = 0, noticeTimer;
 let session;
@@ -101,6 +106,7 @@ function showLogin() {
   $('content').replaceChildren();
   $('dialog').close();
   user = null;
+  detailTicketId = null;
   $('push-onboarding')?.close();
   $('install-onboarding')?.close();
   $('sign-in').hidden = false;
@@ -153,11 +159,16 @@ async function load() {
     $('boot-status').hidden = false;
   }
   try {
-    const data = await request(selectedPage === 'tickets' ? 'dashboard' : selectedPage,
-      selectedPage === 'tickets' ? { offset, openOnly:ticketScope === 'open', status:ticketStatuses.includes(ticketScope) ? ticketScope : undefined, ticket:filter } :
+    const data = await request(selectedPage === 'tickets' ? (detailTicketId ? 'ticketDetail' : 'dashboard') : selectedPage,
+      selectedPage === 'tickets' && detailTicketId ? {id:detailTicketId} : selectedPage === 'tickets' ? { offset, openOnly:ticketScope === 'open', status:ticketStatuses.includes(ticketScope) ? ticketScope : undefined, ticket:filter } :
         selectedPage === 'items' ? { offset:itemOffset,search:itemSearch } : {});
     if (generation !== pageGeneration) return;
     if (selectedPage === 'tickets') user = data.staff;
+    if (selectedPage === 'tickets' && !detailTicketId && pendingTicketNumber) {
+      const ticket = data.tickets.find(ticket=>String(ticket.ticket_number) === pendingTicketNumber);
+      pendingTicketNumber = '';
+      if (ticket) { detailTicketId=ticket.id; return load(); }
+    }
     $('staff-name').textContent = user.name;
     $('boot-status').hidden = true;
     $('desk').hidden = false;
@@ -169,9 +180,12 @@ async function load() {
     $('page-title').textContent = selectedPage === 'tickets' && user.role === 'technician' ? 'My assignments' : pages[selectedPage];
     $('nav').innerHTML = Object.entries(pages).filter(([key])=>key === 'tickets' || user.role !== 'technician')
       .map(([key,label]) => '<button data-page="'+key+'" '+(key === selectedPage ? 'aria-current="page"' : '')+'>'+label+'</button>').join('');
-    $('nav').querySelectorAll('[data-page]').forEach(button => { button.onclick = () => { page = button.dataset.page; closeSidebar(); load(); }; });
+    $('nav').querySelectorAll('[data-page]').forEach(button => { button.onclick = () => { page = button.dataset.page; detailTicketId=null; pendingTicketNumber=''; history.replaceState(null,'','/staff'); closeSidebar(); load(); }; });
     $('page-actions').replaceChildren();
-    if (selectedPage === 'tickets') renderTickets(data);
+    if (selectedPage === 'tickets') {
+      if (detailTicketId) renderTicketDetail(data);
+      else renderTickets(data);
+    }
     if (selectedPage === 'items') renderItems(data);
     if (selectedPage === 'suppliers') renderSuppliers(data);
     if (selectedPage === 'purchases') renderPurchases(data);
@@ -207,31 +221,26 @@ function renderTickets({tickets,technicians,pushKey,limit}) {
     showTechnicianOnboarding(pushKey);
   }
   const technicianOptions = [['','Unassigned'],...technicians.map(t => [t.user_id,t.name])];
-  const repairStatuses = { Assigned:['In Progress','Awaiting Parts','Repair Complete'], 'In Progress':['Awaiting Parts','Repair Complete'], 'Awaiting Parts':['In Progress','Repair Complete'] };
   $('content').innerHTML = '<form id="ticket-filter" class="inline-form">' +
     input('Ticket number','ticket','inputmode="numeric" pattern="[1-9][0-9]{4}" maxlength="5" value="'+e(filter)+'"') +
     select('Status','scope',[['open','Open tickets'],['all','All statuses'],...ticketStatuses],ticketScope) + submitButton('Search') + btn('Refresh','refresh-tickets',true) + '</form>' +
     (tickets.length ? '<div class="list">'+tickets.map(t => {
       const actions = [];
-      if (user.role === 'manager' && !['Repair Complete','Billed','Paid'].includes(t.status)) {
+      if (user.role === 'manager' && !['Repair Complete','Paid, not billed','Billed','Paid'].includes(t.status)) {
         actions.push('<form data-assign="'+e(t.id)+'">'+select('Technician','technician_id',technicianOptions,t.assigned_to).replace(' required','')+submitButton('Save assignment')+'</form>');
       }
       const awaitingParts = t.status === 'Awaiting Parts';
       if (user.role === 'manager' && awaitingParts) {
         actions.push('<button type="button" class="secondary" data-ticket-po="'+e(t.id)+'">Create PO</button>');
       }
-      if (user.role === 'technician' && repairStatuses[t.status]) {
-        const statuses = [placeholder('Choose progress'),...repairStatuses[t.status]];
-        actions.push('<form data-status="'+e(t.id)+'">'+select('Progress','status',statuses)+submitButton('Update')+'</form>');
-      }
-      return '<article class="panel"'+(awaitingParts?' style="background:#fff1f2;border-color:#fca5a5"':'')+'><div class="section-title"><h2>#'+t.ticket_number+' · '+e(t.appliance)+'</h2><span class="badge"'+(awaitingParts?' style="'+lightRedAlert+'"':'')+'>'+e(t.status)+'</span></div>'+
-        '<p>'+e(t.customer_name)+' · <a href="tel:+91'+e(t.mobile)+'">'+e(t.mobile)+'</a></p><p>'+e(t.issue)+'</p>'+
-        '<p class="meta">'+[t.brand,t.service_type,t.intake_source,date(t.created_at)].map(e).join(' · ')+'</p>'+
-        '<a href="'+e(mapsLink(t))+'" target="_blank" rel="noopener noreferrer">'+e(t.service_address)+', '+e(t.locality)+'</a>'+
-        '<div class="card-actions">'+actions.join('')+'</div></article>';
+      actions.push('<button type="button" class="secondary" data-ticket-detail="'+e(t.id)+'" data-ticket-number="'+t.ticket_number+'">View details</button>');
+      return '<article class="panel ticket-card"'+(awaitingParts?' style="background:#fff1f2;border-color:#fca5a5"':'')+'><div class="section-title"><h2>#'+t.ticket_number+' · '+e(t.appliance)+'</h2>'+statusBadge(t.status)+'</div>'+
+        '<p>'+e(t.brand)+' · '+e(t.customer_name)+'</p><p class="issue-preview">'+e(t.issue)+'</p>'+
+        '<p class="meta">'+e(t.locality)+'</p><div class="card-actions"><a class="action-link" href="tel:+91'+e(t.mobile)+'">Call</a>'+actions.join('')+'</div></article>';
     }).join('')+'</div>' : '<p class="panel muted">No tickets match this view.</p>') +
     '<div class="actions">'+(offset ? btn('Previous','page-prev',true) : '')+(tickets.length === limit ? btn('Next','page-next',true) : '')+'</div>';
   submit($('ticket-filter'),async data => {
+    pendingTicketNumber = '';
     filter = data.ticket;
     ticketScope = filter && data.scope === 'open' ? 'all' : data.scope;
     offset = 0;
@@ -251,26 +260,11 @@ function renderTickets({tickets,technicians,pushKey,limit}) {
     notice(result.notification || 'Assignment saved');
     await load();
   }));
-  for (const form of $('content').querySelectorAll('[data-status]')) {
-    const progress = form.elements.status;
-    progress.onchange = () => { if (progress.value === 'Repair Complete') form.requestSubmit(); };
-    submit(form,async ({status}) => {
-      const id = form.dataset.status;
-      if (status === 'Repair Complete') {
-        progress.value = '';
-        const {items,parts} = await request('parts',{id});
-        if (!form.isConnected || $('dialog').open) return;
-        editableLines('Parts used',items,parts,false,async lines => {
-          await request('saveParts',{id,parts:lines});
-          await request('status',{id,status});
-          return 'Repair completed and ready for billing';
-        },'','Save parts and complete repair');
-        return;
-      }
-      await request('status',{id,status});
-      notice('Progress updated'); await load();
-    });
-  }
+  for (const button of $('content').querySelectorAll('[data-ticket-detail]')) button.onclick = () => {
+    detailTicketId=button.dataset.ticketDetail;
+    history.pushState(null,'','/staff?ticket='+button.dataset.ticketNumber);
+    load();
+  };
   for (const button of $('content').querySelectorAll('[data-ticket-po]')) button.onclick = async () => {
     const ticket = tickets.find(t => t.id === button.dataset.ticketPo);
     button.disabled = true;
@@ -281,6 +275,104 @@ function renderTickets({tickets,technicians,pushKey,limit}) {
       notice(error.message);
     } finally { button.disabled = false; }
   };
+}
+
+function renderTicketDetail(data) {
+  const t=data.ticket;
+  const assigned=user.role === 'technician' && t.assigned_to === user.user_id;
+  const open=!completedStatuses.includes(t.status);
+  const canCollect=(assigned || ['manager','billing'].includes(user.role)) && !open && (!data.invoice || data.remaining > 0);
+  $('page-title').textContent='Ticket #'+t.ticket_number;
+  $('page-actions').innerHTML=btn('Back to tickets','back-tickets',true);
+  $('back-tickets').onclick=()=>{detailTicketId=null;pendingTicketNumber='';history.replaceState(null,'','/staff');load();};
+  const customerUrl=new URL('/',location.origin);
+  customerUrl.search=new URLSearchParams({view:'track',ticket:t.ticket_number,access:t.customer_view_key}).toString();
+  customerUrl.hash='complaints';
+  const detail=(label,value)=>'<div><dt>'+label+'</dt><dd>'+e(value || '—')+'</dd></div>';
+  $('content').innerHTML='<section class="panel"><div class="section-title"><h2>'+e(t.appliance)+' · '+e(t.brand)+'</h2>'+statusBadge(t.status)+'</div><p>'+e(t.customer_name)+'</p><p class="preserve-lines">'+e(t.issue)+'</p><div class="actions"><a class="action-link" href="tel:+91'+e(t.mobile)+'">Call '+e(t.mobile)+'</a><a class="action-link" target="_blank" rel="noopener noreferrer" href="'+e(mapsLink(t))+'">Directions</a></div><dl class="ticket-facts">'+detail('Service address',[t.service_address,t.locality,t.city].filter(Boolean).join(', '))+detail('Service type',t.service_type)+detail('Source',t.intake_source)+detail('Created',date(t.created_at))+'</dl><div class="actions" id="repair-actions"></div></section>'+
+    '<section class="panel"><h2>Inspection</h2>'+(assigned && open ? '<form id="inspection-form" class="grid"><label>Inspection notes<textarea name="notes" maxlength="2000" rows="3">'+e(t.inspection_notes)+'</textarea></label>'+submitButton(t.status === 'Assigned' ? 'Start inspection' : 'Save inspection')+'</form>' : '<p class="preserve-lines">'+e(t.inspection_notes || 'No inspection notes yet.')+'</p>')+'<h3 class="section-gap">Before photos <small class="meta">Optional</small></h3><div id="inspection-gallery">'+photoGallery(data.media,'inspection')+'</div><div id="inspection-photos"></div></section>'+
+    '<section class="panel"><h2>Repair completion</h2><p class="preserve-lines">'+e(t.completion_notes || 'Complete the repair to record the work performed, parts used and test result.')+'</p>'+(t.test_result ? '<h3>Test result</h3><p class="preserve-lines">'+e(t.test_result)+'</p>' : '')+(data.parts.length ? '<h3>Parts used</h3><ul>'+data.parts.map(part=>'<li>'+e(part.items?.description)+' · '+e(part.quantity)+' '+e(part.items?.uom)+'</li>').join('')+'</ul>' : '')+'<h3 class="section-gap">After photos <small class="meta">Optional</small></h3>'+photoGallery(data.media,'completion')+'<div id="completion-photos"></div></section>'+
+    '<section class="panel"><div class="section-title"><h2>Payments and billing</h2>'+(canCollect ? btn('Receive payment','receive-payment') : '')+'</div>'+financialSummary(data)+receiptHistory(data.payments,data.media)+'<div class="actions"><a class="action-link" href="'+e(customerUrl.href)+'" target="_blank" rel="noopener noreferrer">Customer view</a>'+btn('Copy customer link','copy-customer-link',true)+'</div><p class="meta section-gap">The customer needs this private link and their registered mobile number to view photos and receipts.</p></section>';
+  $('copy-customer-link').onclick=async()=>{try{await navigator.clipboard.writeText(customerUrl.href);notice('Customer link copied');}catch{notice('Open Customer view and copy its address to share the private link.');}};
+  if(canCollect)$('receive-payment').onclick=()=>receivePaymentModal(data);
+  if(assigned && open){
+    if(t.status !== 'Assigned'){
+      $('repair-actions').innerHTML=btn(t.status === 'Awaiting Parts' ? 'Resume repair' : 'Awaiting parts','change-progress',true)+btn('Complete repair','complete-repair');
+      $('change-progress').onclick=async event=>{
+        const button=event.currentTarget;button.disabled=true;
+        try{await request('status',{id:t.id,status:t.status === 'Awaiting Parts' ? 'In Progress' : 'Awaiting Parts'});await load();}catch(error){notice(error.message);button.disabled=false;}
+      };
+      $('complete-repair').onclick=async event=>{
+        const button=event.currentTarget;button.disabled=true;
+        try{const catalog=await request('parts',{id:t.id});completionReview(t,catalog,data.media);}catch(error){notice(error.message);}finally{button.disabled=false;}
+      };
+    }
+    submit($('inspection-form'),async values=>{await request('inspection',{id:t.id,notes:values.notes});notice('Inspection saved');await load();});
+  }
+  if(assigned || user.role === 'manager')for(const stage of ['inspection','completion']){
+    mountPhotoControls($(stage+'-photos'),{ticketId:t.id,stage,request,onUploaded:load,onError:notice});
+  }
+}
+
+function completionReview(ticket,catalog,media) {
+  const form=editableLines('Complete repair · #'+ticket.ticket_number,catalog.items,catalog.parts,false,async(parts,values)=>{
+    await request('completeRepair',{id:ticket.id,parts,notes:values.notes,test_result:values.test_result});
+    return 'Repair completed. You can now receive payment.';
+  },'<label>Work performed<textarea name="notes" required maxlength="2000" rows="3">'+e(ticket.completion_notes)+'</textarea></label><label>Test result<textarea name="test_result" required maxlength="1000" rows="2" placeholder="For example: cooling checked and working normally">'+e(ticket.test_result)+'</textarea></label><h3>After photos <small class="meta">Optional</small></h3><div id="completion-review-gallery">'+photoGallery(media,'completion')+'</div><div id="completion-review-photos"></div><h3>Parts used</h3>','Complete repair');
+  mountPhotoControls(form.querySelector('#completion-review-photos'),{ticketId:ticket.id,stage:'completion',request,onError:notice,onUploaded:async()=>{
+    const latest=await request('ticketDetail',{id:ticket.id});
+    form.querySelector('#completion-review-gallery').innerHTML=photoGallery(latest.media,'completion');
+  }});
+}
+
+function receivePaymentModal(data) {
+  const key=crypto.randomUUID(),ticket=data.ticket;
+  let signatureId=null,proofId=null,selectedProof=null;
+  const form=modal('Receive payment · #'+ticket.ticket_number,
+    input('Amount received (₹)','amount','type="number" min="0.01" max="'+e(data.invoice ? data.remaining : 9999999)+'" step="0.01" required '+(data.invoice ? 'value="'+e(data.remaining)+'"' : ''))+
+    select('Payment method','method',['Cash','UPI'])+
+    '<section id="upi-proof" hidden>'+input('UPI transaction reference (optional)','reference','maxlength="100"')+input('Payment screenshot or photo (optional)','proof','type="file" accept="image/jpeg,image/png,image/webp"')+btn('Take payment photo','take-payment-photo',true)+'<input name="proof_camera" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden><p id="proof-selection" class="meta"></p><p class="meta">Choose a screenshot, or use the camera on your phone. Confirm receipt in your payment account.</p></section>'+
+    '<section id="cash-ack"><p id="acknowledgement" class="cash-acknowledgement"></p><label>Customer signature<canvas id="customer-signature" aria-label="Customer signature pad"></canvas></label>'+btn('Clear signature','clear-signature',true)+'<label class="check-row"><input type="checkbox" name="cannot_sign">Customer cannot sign</label><label id="signature-reason" hidden>Reason customer cannot sign<textarea name="signature_waiver" maxlength="500" disabled></textarea></label></section>'+
+    '<label class="check-row"><input type="checkbox" name="confirmed_received" required>I confirm the money has been received.</label>',
+    'Save payment',async values=>{
+      const cash=values.method === 'Cash';
+      const waiver=cash && form.elements.cannot_sign.checked ? values.signature_waiver.trim() : '';
+      if(cash && !waiver && !signatureId){
+        const blob=await pad.blob();
+        if(!blob)throw new Error('Ask the customer to sign, or record why they cannot sign.');
+        signatureId=await uploadTicketMedia(request,ticket.id,'signature',blob,'customer-signature.png');
+      }
+      if(!cash && selectedProof && !proofId){
+        const file=selectedProof;
+        proofId=await uploadTicketMedia(request,ticket.id,'payment',await compressPhoto(file),file.name || 'upi-payment.jpg');
+      }
+      const receipt=await request('receivePayment',{id:key,ticket_id:ticket.id,amount:Number(values.amount),method:values.method,reference:cash ? '' : values.reference,
+        proof_media_id:cash ? null : proofId,signature_media_id:cash && !waiver ? signatureId : null,signature_waiver:waiver,confirmed_received:true});
+      return 'Receipt RCPT-'+receipt.receipt_number+' saved';
+    });
+  const canvas=form.querySelector('#customer-signature'),pad=signaturePad(canvas,()=>{signatureId=null;});
+  const clear=()=>{signatureId=null;pad.clear();};
+  form.querySelector('#clear-signature').onclick=clear;
+  form.elements.amount.oninput=()=>{clear();form.elements.confirmed_received.checked=false;updateAck();};
+  for(const field of [form.elements.proof,form.elements.proof_camera])field.onchange=()=>{proofId=null;selectedProof=field.files[0] || null;form.querySelector('#proof-selection').textContent=selectedProof?.name || '';};
+  form.querySelector('#take-payment-photo').onclick=()=>form.elements.proof_camera.click();
+  function updateAck(){form.querySelector('#acknowledgement').textContent='I confirm that I paid '+money(form.elements.amount.value || 0)+' in cash to Jyoti Refrigeration for ticket #'+ticket.ticket_number+'.';}
+  function updateMethod(){
+    const cash=form.elements.method.value === 'Cash';
+    form.querySelector('#cash-ack').hidden=!cash;
+    form.querySelector('#upi-proof').hidden=cash;
+    const waived=cash && form.elements.cannot_sign.checked;
+    form.querySelector('#signature-reason').hidden=!waived;
+    form.elements.signature_waiver.disabled=!waived;
+    form.elements.signature_waiver.required=waived;
+    canvas.hidden=waived;
+    form.querySelector('#clear-signature').hidden=waived;
+    form.elements.confirmed_received.checked=false;
+    clear();updateAck();markRequiredFields(form);
+  }
+  form.elements.method.onchange=updateMethod;
+  form.elements.cannot_sign.onchange=updateMethod;
+  updateMethod();
 }
 
 function newTicket() {
@@ -502,9 +594,10 @@ function editableLines(title,items,existing,priced,save,fields = '',label = pric
   form.querySelector('#add-line').onclick = () => addLine();
   for (const line of existing) addLine(line);
   if (!existing.length) addLine();
+  return form;
 }
 
-const payable = (row) => Math.round((Number(row.total ?? row.amount) - (row.payments || []).reduce((sum,p)=>sum+Number(p.amount),0))*100)/100;
+const payable = row => Math.max(0,Math.round((Number(row.total ?? row.amount)-(row.payments || []).reduce((sum,p)=>sum+Number(p.amount),0))*100)/100);
 function paymentModal(row, type) {
   const key = crypto.randomUUID();
   const due = payable(row);
@@ -643,13 +736,16 @@ function updateInvoiceDraft(form, parts) {
 
 function renderBilling({completed,invoices}) {
   $('content').innerHTML = '<section class="panel"><h2>Ready to bill</h2>'+
-    (completed.length ? completed.map(t=>'<div class="card-actions"><strong>#'+t.ticket_number+' · '+e(t.customer_name)+'</strong><button data-draft="'+e(t.id)+'">Review invoice</button></div>').join('') :
+    (completed.length ? completed.map(t=>'<div class="card-actions"><strong>#'+t.ticket_number+' · '+e(t.customer_name)+'</strong>'+((t.payments || []).length ? '<span class="badge status-unbilled">Received '+money(t.payments.reduce((sum,p)=>sum+Number(p.amount),0))+'</span>' : '')+'<button data-draft="'+e(t.id)+'">Review invoice</button></div>').join('') :
       '<p class="muted">No completed repairs awaiting billing.</p>')+'</section>'+
     '<section class="panel"><h2>Issued invoices</h2>'+
     (invoices.length ? invoices.map(b=>{
       const due = payable(b);
+      const received = (b.payments || []).reduce((sum,p)=>sum+Number(p.amount),0);
+      const excess = Math.max(0,Math.round((received-Number(b.total))*100)/100);
       const state = !due ? 'Paid' : due === Number(b.total) ? 'Pending payment' : 'Part paid';
-      return '<div class="card-actions"><strong>'+e(b.number)+' · '+e(b.customer_name)+'</strong><span class="badge">'+state+'</span> '+money(due)+' due'+
+      return '<div class="card-actions"><strong>'+e(b.number)+' · '+e(b.customer_name)+'</strong><span class="badge">'+state+'</span> '+'<span>Total '+money(b.total)+' · Received '+money(received)+' · Remaining '+money(due)+'</span>'+
+        (excess > 0 ? '<span class="excess-payment">Excess '+money(excess)+' · refund or credit required</span>' : '')+
         '<button class="secondary" data-invoice-print="'+e(b.id)+'">Print / PDF</button>'+
         (due>0?'<button data-invoice-pay="'+e(b.id)+'">Record payment</button>' +
           (b.service_tickets?.mobile ? '<a href="tel:+91'+e(b.service_tickets.mobile)+'">Call customer</a>' : '') : '')+'</div>';
@@ -687,6 +783,12 @@ function renderBilling({completed,invoices}) {
   for (const button of $('content').querySelectorAll('[data-invoice-print]')) button.onclick = () => printInvoice(invoices.find(b=>b.id===button.dataset.invoicePrint));
   for (const button of $('content').querySelectorAll('[data-invoice-pay]')) button.onclick = () => paymentModal(invoices.find(b=>b.id===button.dataset.invoicePay),'invoice_id');
 }
+
+window.addEventListener('popstate',()=>{
+  const number=new URL(location.href).searchParams.get('ticket') || '';
+  detailTicketId=null;pendingTicketNumber=number;filter=number;ticketScope=number ? 'all' : 'open';page='tickets';
+  if(session) load();
+});
 
 $('menu-toggle').onclick = () => {
   const open = document.body.classList.toggle('menu-open');

@@ -36,6 +36,7 @@ h1{font-size:clamp(3.6rem,8vw,7.2rem);line-height:.92;max-width:12ch}
 #customer-portal textarea{resize:vertical;min-height:4rem}#customer-portal .trap{position:absolute;left:-10000px}#customer-portal .error{color:#9b211d}[hidden]{display:none!important}
 @media(max-width:560px){#customer-portal .pair{grid-template-columns:1fr}}
 </style>
+<link rel="stylesheet" href="/ticket-detail.css">
 </head>
 <body>
 <header class="top"><nav class="wrap" aria-label="Main navigation"><a href="#top" class="brand"><span class="mark" aria-hidden="true">JR</span>Jyoti Refrigeration</a><div class="links"><a href="#services">Services</a><a href="#visit">Visit the shop</a></div></nav></header>
@@ -82,7 +83,11 @@ h1{font-size:clamp(3.6rem,8vw,7.2rem);line-height:.92;max-width:12ch}
 <section id="visit" class="band visit"><div class="wrap"><div><h2>Visit Jyoti Refrigeration</h2><p class="limit">Pratappur Naka Road, Ambikapur, Chhattisgarh</p></div><div><p>For a home visit, include your locality and a short description of the issue when you submit a complaint. The form gives you a ticket number to keep for follow-up.</p><a class="btn" href="https://www.google.com/maps/search/?api=1&amp;query=Jyoti+Refrigeration+Ambikapur+Chhattisgarh">Find us on Google Maps</a></div></div></section>
 </main>
 <footer><div class="wrap"><span>Jyoti Refrigeration · Ambikapur</span><a href="/staff">Staff sign in</a></div></footer>
-<script>
+<script type="module">
+import {statusBadge,photoGallery,receiptHistory,financialSummary} from './ticket-display.js';
+const escapeCustomer = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const customerParams=new URL(location.href).searchParams;
+let customerAccess=customerParams.get('access') || '',customerTicket=customerParams.get('ticket') || '';
 const portal = document.getElementById('customer-portal');
 const trackForm = document.getElementById('track-form');
 const trackResult = document.getElementById('track-result');
@@ -100,12 +105,21 @@ trackForm.addEventListener('submit', event => {
   const button = trackForm.querySelector('button');
   button.disabled = true;
   trackResult.textContent = 'Checking status…';
-  request('track', Object.fromEntries(new FormData(trackForm))).then(result => {
-    trackResult.textContent = result ? 'Current status: ' + result.status : 'No matching ticket. Check the number and mobile number.';
+  const values=Object.fromEntries(new FormData(trackForm));
+  if(customerAccess && values.ticket === customerTicket)values.access=customerAccess;
+  request('track', values).then(result => {
+    if(!result){trackResult.textContent='No matching ticket. Check the number and mobile number.';return;}
+    if(!result.payments){trackResult.innerHTML=statusBadge(result.status);return;}
+    trackResult.innerHTML='<h3>Ticket #'+escapeCustomer(result.ticket_number)+'</h3>'+statusBadge(result.status)+'<p>'+escapeCustomer(result.customer_name)+' · '+escapeCustomer(result.appliance)+' · '+escapeCustomer(result.brand)+'</p><h3>Inspection</h3><p class="preserve-lines">'+escapeCustomer(result.inspection_notes || 'No inspection notes yet.')+'</p>'+photoGallery(result.media,'inspection')+'<h3>Repair completion</h3><p class="preserve-lines">'+escapeCustomer(result.completion_notes || 'Repair is not complete yet.')+'</p>'+(result.test_result ? '<p>Test result · '+escapeCustomer(result.test_result)+'</p>' : '')+photoGallery(result.media,'completion')+'<h3>Payments and billing</h3>'+financialSummary(result)+receiptHistory(result.payments,result.media);
+
   }).catch(failure => {
     trackResult.textContent = failure.message;
   }).finally(() => { button.disabled = false; });
 });
+if(customerParams.get('view') === 'track'){
+  showPanel(true);
+  if(/^[1-9][0-9]{4}$/.test(customerTicket))trackForm.elements.ticket.value=customerTicket;
+}
 const form = document.getElementById('complaint');
 const error = document.getElementById('error');
 const locationMessage = document.getElementById('location');
@@ -135,6 +149,13 @@ form.addEventListener('submit', event => {
   send.textContent = 'Submitting…';
   request('submit', {...Object.fromEntries(new FormData(form)), key}).then(result => {
     document.getElementById('ticket').textContent = result.ticket;
+    if(result.access){
+      customerAccess=result.access;customerTicket=String(result.ticket);
+      const link=document.createElement('a');
+      link.href='/?'+new URLSearchParams({view:'track',ticket:result.ticket,access:result.access})+'#complaints';
+      link.textContent='Open your private ticket and payment history';
+      document.getElementById('confirmation').append(link);
+    }
     trackForm.elements.ticket.value = result.ticket;
     trackForm.elements.mobile.value = form.elements.mobile.value;
     form.hidden = true;
