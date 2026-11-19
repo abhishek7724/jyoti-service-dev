@@ -1,4 +1,6 @@
 import { printInvoice, printPurchase } from './documents.js';
+import { brandOptions, localityOptions, uomOptions } from './lookups.js';
+import { attachSuggestions } from './combobox.js';
 
 const $ = (id) => document.getElementById(id);
 const e = (value) => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -15,14 +17,13 @@ const formData = form => Object.fromEntries(new FormData(form));
 const submitButton = (label) => '<button>'+label+'</button>';
 const placeholder = (label) => ['',label];
 const applianceOptions = ['Refrigerator','Washing Machine','Air Conditioner','Television','Microwave','Water Purifier','Water Heater','Dishwasher','Chimney','Mixer Grinder','Induction Cooktop','Air Cooler','Other'];
-const brandOptions = ['LG','Samsung','Whirlpool','Godrej','IFB','Bosch','Siemens','Haier','Panasonic','Sony','Voltas','Blue Star','Daikin','Hitachi','Carrier','Lloyd','Onida','Philips','Prestige','Bajaj','Havells','Crompton','Kent','Aquaguard','AO Smith','Racold','Other','Unknown'];
-const localityOptions = ['Bhagwanpur','Godhanpur','Bhatti Road','Pratappur Naka','D.C. Road','Other'];
-const pages = { tickets:'Service tickets',catalog:'Items and suppliers',purchases:'Purchasing',billing:'Billing' };
+const pages = { tickets:'Service tickets',items:'Item master',suppliers:'Supplier master',purchases:'Purchasing',billing:'Billing' };
 const originalTicket = new URL(location.href).searchParams.get('ticket') || '';
 let filter = /^[1-9][0-9]{4}$/.test(originalTicket) ? originalTicket : '';
 let ticketScope = filter ? 'all' : 'open';
 const ticketStatuses = ['New','Assigned','In Progress','Awaiting Parts','Repair Complete','Billed','Paid'];
 let offset = 0;
+let itemOffset = 0, itemSearch = '';
 let user, refresh, page = 'tickets', pageGeneration = 0, noticeTimer;
 let session;
 try { session = JSON.parse(localStorage.getItem('jyoti-staff') || 'null'); } catch { session = null; }
@@ -31,6 +32,35 @@ function persistSession(value) {
   session = value;
   if (value) localStorage.setItem('jyoti-staff', JSON.stringify(value));
   else localStorage.removeItem('jyoti-staff');
+}
+
+function markRequiredFields(root = document) {
+  for (const label of root.querySelectorAll('label')) {
+    const control = label.querySelector('input,select,textarea');
+    if (!control) continue;
+    let caption = label.querySelector(':scope > .field-caption');
+    if (!caption) {
+      caption = document.createElement('span');
+      caption.className = 'field-caption';
+      for (const node of [...label.childNodes]) if (node.nodeType === Node.TEXT_NODE) caption.append(node);
+      label.prepend(caption);
+    }
+    let marker = caption.querySelector('.required-mark');
+    if (!marker && control.required) {
+      marker = document.createElement('span');
+      marker.className = 'required-mark';
+      marker.textContent = ' *';
+      marker.setAttribute('aria-hidden','true');
+      caption.append(marker);
+    }
+    if (marker) marker.hidden = !control.required || control.disabled;
+  }
+}
+
+function closeSidebar() {
+  document.body.classList.remove('menu-open');
+  $('menu-toggle').setAttribute('aria-expanded','false');
+  $('sidebar-backdrop').hidden = true;
 }
 
 function notice(text) {
@@ -58,6 +88,10 @@ async function request(action,input = {},auth = true) {
 }
 
 function showLogin() {
+  closeSidebar();
+  document.body.classList.remove('signed-in');
+  $('sidebar').hidden = true;
+  $('menu-toggle').hidden = true;
   persistSession(null);
   pageGeneration++;
   $('boot-status').hidden = true;
@@ -94,6 +128,7 @@ function modal(title, fields, label, handler) {
   $('dialog-content').innerHTML = '<form class="grid">' + fields + submitButton(label) + '</form>';
   const form = $('dialog-content').querySelector('form');
   $('dialog-error').textContent = '';
+  markRequiredFields(form);
   $('dialog').showModal();
   submit(form, async (data) => {
     const result = await handler(data);
@@ -119,23 +154,29 @@ async function load() {
   }
   try {
     const data = await request(selectedPage === 'tickets' ? 'dashboard' : selectedPage,
-      selectedPage === 'tickets' ? { offset, openOnly:ticketScope === 'open', status:ticketStatuses.includes(ticketScope) ? ticketScope : undefined, ticket:filter } : {});
+      selectedPage === 'tickets' ? { offset, openOnly:ticketScope === 'open', status:ticketStatuses.includes(ticketScope) ? ticketScope : undefined, ticket:filter } :
+        selectedPage === 'items' ? { offset:itemOffset,search:itemSearch } : {});
     if (generation !== pageGeneration) return;
     if (selectedPage === 'tickets') user = data.staff;
     $('staff-name').textContent = user.name;
     $('boot-status').hidden = true;
     $('desk').hidden = false;
+    document.body.classList.add('signed-in');
+    $('sidebar').hidden = false;
+    $('menu-toggle').hidden = false;
     $('logout').hidden = false;
     $('sign-in').hidden = true;
     $('page-title').textContent = selectedPage === 'tickets' && user.role === 'technician' ? 'My assignments' : pages[selectedPage];
     $('nav').innerHTML = Object.entries(pages).filter(([key])=>key === 'tickets' || user.role !== 'technician')
       .map(([key,label]) => '<button data-page="'+key+'" '+(key === selectedPage ? 'aria-current="page"' : '')+'>'+label+'</button>').join('');
-    $('nav').querySelectorAll('[data-page]').forEach(button => { button.onclick = () => { page = button.dataset.page; load(); }; });
+    $('nav').querySelectorAll('[data-page]').forEach(button => { button.onclick = () => { page = button.dataset.page; closeSidebar(); load(); }; });
     $('page-actions').replaceChildren();
     if (selectedPage === 'tickets') renderTickets(data);
-    if (selectedPage === 'catalog') renderCatalog(data);
+    if (selectedPage === 'items') renderItems(data);
+    if (selectedPage === 'suppliers') renderSuppliers(data);
     if (selectedPage === 'purchases') renderPurchases(data);
     if (selectedPage === 'billing') renderBilling(data);
+    markRequiredFields($('content'));
   } catch (error) {
     if (generation !== pageGeneration || error.status === 401) return;
     if (!$('boot-status').hidden) {
@@ -248,8 +289,8 @@ function newTicket() {
   const form = modal('New service ticket',
     '<div class="pair">'+input('Customer name','customer_name','required maxlength="100"')+
     input('Mobile number','mobile','required inputmode="numeric" type="tel" pattern="[6-9][0-9]{9}" maxlength="10"')+
-    select('Service area','locality',[placeholder('Choose locality'),...localityOptions])+
-    select('Brand','brand',[placeholder('Choose brand'),...brandOptions])+
+    input('Service area','locality','required maxlength="100" placeholder="Type locality"')+
+    input('Brand','brand','required maxlength="100" placeholder="Type brand"')+
     select('Appliance','appliance',[placeholder('Choose appliance'),...applianceOptions])+
     input('City','city','value="Ambikapur, CG" required')+
     select('Service type','service_type',['Bring to Shop','Home Visit','Home Pickup','Installation','Preventive Maintenance','Warranty Service'])+
@@ -262,6 +303,8 @@ function newTicket() {
       const result = await request('createTicket',{...data,...coordinates,key,maps_url:data.maps_url || null});
       return 'Ticket #'+result.ticket_number+' registered';
     });
+  attachSuggestions(form,'locality',localityOptions);
+  attachSuggestions(form,'brand',brandOptions);
   form.elements.mobile.addEventListener('blur', async () => {
     const mobile = form.elements.mobile.value;
     if (!/^[6-9][0-9]{9}$/.test(mobile)) return;
@@ -454,6 +497,7 @@ function editableLines(title,items,existing,priced,save,fields = '',label = pric
       wrapper.querySelector('[name="unit_price"]').value = byId.get(event.target.value)?.purchase_price ?? '';
     };
     $('lines').append(wrapper);
+    markRequiredFields(wrapper);
   }
   form.querySelector('#add-line').onclick = () => addLine();
   for (const line of existing) addLine(line);
@@ -471,24 +515,53 @@ function paymentModal(row, type) {
   });
 }
 
-function renderCatalog({items,suppliers}) {
-  $('page-actions').innerHTML = btn('New item','new-item')+btn('New supplier','new-supplier',true);
-  $('content').innerHTML = '<section class="panel"><h2>Item master</h2><div class="table-wrap"><table><thead><tr><th>Item</th><th>Unit</th><th>Purchase price</th><th>Sale price</th><th></th></tr></thead><tbody>'+
-    items.map(i=>'<tr><td>'+e(i.code)+' · '+e(i.description)+'</td><td>'+e(i.uom)+'</td><td>'+money(i.purchase_price)+'</td><td>'+money(i.sale_price)+'</td><td><button class="secondary" data-item="'+e(i.id)+'">Edit</button></td></tr>').join('')+
-    '</tbody></table></div>'+(items.length ? '' : '<p class="muted">Add the parts you buy and use in repairs.</p>')+'</section><section class="panel"><h2>Suppliers</h2>'+
-    suppliers.map(s=>'<p><strong>'+e(s.name)+'</strong> '+e(s.contact)+' <span class="meta">'+e(s.address)+'</span></p>').join('')+'</section>';
-  const itemForm = (i={}) => {
-    const textInput = (label,name,required = true) => input(label,name,(required?'required ':'')+'value="'+e(i[name] ?? '')+'"');
-    const moneyInput = (label,name,max='') => input(label,name,'type="number" min="0" step="0.01" '+max+' required value="'+e(i[name] ?? '')+'"');
-    modal(i.id ? 'Edit item' : 'New item','<div class="pair">'+input('Item code','code','required value="'+e(i.code ?? '')+'"'+(i.id?' readonly':''))+
-      textInput('Unit of measure','uom')+'</div>'+textInput('Description','description')+textInput('HSN/SAC','hsn_sac',false)+
-      '<div class="pair">'+moneyInput('Purchase price','purchase_price')+moneyInput('Customer price','sale_price')+'</div>'+
-      moneyInput('Tax rate %','tax_rate','max="100"'),'Save item',data=>request('item',numberFields(data,'purchase_price','sale_price','tax_rate')));
-  };
+function itemForm(item = {}) {
+  const textInput = (label,name,required = false,max = 100) => input(label,name,
+    (required ? 'required ' : '')+'maxlength="'+max+'" value="'+e(item[name] ?? '')+'"');
+  const moneyInput = (label,name,required = true,max = 9999999) => input(label,name,
+    'type="number" min="0" max="'+max+'" step="0.01" '+(required ? 'required ' : '')+'value="'+e(item[name] ?? '')+'"');
+  const units = uomOptions.includes(item.uom) || !item.uom ? uomOptions : [item.uom,...uomOptions];
+  const form = modal(item.id ? 'Edit item' : 'New item',
+    '<div class="pair">'+input('Item code','code','required maxlength="32" value="'+e(item.code ?? '')+'"'+(item.id ? ' readonly' : ''))+
+    select('Unit of measure','uom',[placeholder('Choose unit'),...units],item.uom)+'</div>'+
+    textInput('Description','description',true,180)+
+    '<div class="pair">'+textInput('Brand','brand')+textInput('Model','model')+'</div>'+
+    textInput('HSN/SAC','hsn_sac',false,12)+
+    '<div class="pair">'+moneyInput('Purchase price','purchase_price')+moneyInput('Customer price','sale_price',false)+'</div>'+
+    moneyInput('Tax rate %','tax_rate',true,100), 'Save item',data=>request('item',{
+      ...numberFields(data,'purchase_price','tax_rate'),
+      sale_price:data.sale_price.trim() === '' ? null : Number(data.sale_price),
+    }));
+  attachSuggestions(form,'brand',brandOptions);
+}
+
+function renderItems({items,total,limit,offset:currentOffset}) {
+  $('page-actions').innerHTML = btn('New item','new-item');
   $('new-item').onclick = () => itemForm();
-  $('content').querySelectorAll('[data-item]').forEach(button => { button.onclick = () => itemForm(items.find(i=>i.id===button.dataset.item)); });
-  $('new-supplier').onclick = () => modal('New supplier',input('Business name','name','required')+input('Contact','contact')+
-    input('Address','address')+input('GSTIN','gstin'),'Save supplier',data=>request('supplier',data));
+  $('content').innerHTML = '<form id="item-search" class="inline-form master-search">'+
+    input('Search items','search','type="search" maxlength="100" placeholder="Code, description, brand or model" value="'+e(itemSearch)+'"')+
+    submitButton('Search')+'</form><section class="panel">'+
+    '<p class="meta">'+(total ? 'Showing '+(currentOffset+1)+'–'+(currentOffset+items.length)+' of '+total+' items' : 'No matching items')+'</p>'+
+    '<div class="table-wrap"><table><thead><tr><th>Item code</th><th>Description</th><th>Brand</th><th>Model</th><th>Unit</th><th>Purchase price</th><th>Customer price</th><th></th></tr></thead><tbody>'+
+    items.map(item=>'<tr><td>'+e(item.code)+'</td><td>'+e(item.description)+'</td><td>'+e(item.brand || '—')+'</td><td>'+e(item.model || '—')+'</td><td>'+e(item.uom)+'</td><td>'+money(item.purchase_price)+'</td><td>'+
+      (item.sale_price == null ? '—' : money(item.sale_price))+'</td><td><button class="secondary" data-item="'+e(item.id)+'">Edit</button></td></tr>').join('')+
+    '</tbody></table></div>'+(items.length ? '' : '<p class="muted">'+(itemSearch ? 'Try another item code, description, brand or model.' : 'Add the parts you buy and use in repairs.')+'</p>')+'</section>'+
+    '<div class="pagination"><span class="meta">Page '+(Math.floor(currentOffset/limit)+1)+' of '+Math.max(1,Math.ceil(total/limit))+'</span><div class="actions">'+
+    (currentOffset ? btn('Previous','items-prev',true) : '')+(currentOffset+limit<total ? btn('Next','items-next',true) : '')+'</div></div>';
+  submit($('item-search'),async data => { itemSearch = data.search.trim(); itemOffset = 0; await load(); });
+  if ($('items-prev')) $('items-prev').onclick = () => { itemOffset = Math.max(0,currentOffset-limit); load(); };
+  if ($('items-next')) $('items-next').onclick = () => { itemOffset = currentOffset+limit; load(); };
+  for (const button of $('content').querySelectorAll('[data-item]')) button.onclick = () => itemForm(items.find(item=>item.id === button.dataset.item));
+}
+
+function renderSuppliers({suppliers}) {
+  $('page-actions').innerHTML = btn('New supplier','new-supplier');
+  $('new-supplier').onclick = () => modal('New supplier',input('Business name','name','required maxlength="150"')+
+    input('Contact','contact','maxlength="100"')+input('Address','address','maxlength="300"')+
+    input('GSTIN','gstin','maxlength="15"'),'Save supplier',data=>request('supplier',data));
+  $('content').innerHTML = '<section class="panel"><div class="table-wrap"><table><thead><tr><th>Business name</th><th>Contact</th><th>Address</th><th>GSTIN</th></tr></thead><tbody>'+
+    suppliers.map(supplier=>'<tr><td><strong>'+e(supplier.name)+'</strong></td><td>'+e(supplier.contact || '—')+'</td><td>'+e(supplier.address || '—')+'</td><td>'+e(supplier.gstin || '—')+'</td></tr>').join('')+
+    '</tbody></table></div>'+(suppliers.length ? '' : '<p class="muted">Add the suppliers you purchase parts from.</p>')+'</section>';
 }
 
 function openPurchaseForm({items,suppliers}, ticket = null) {
@@ -550,6 +623,7 @@ function updateInvoiceDraft(form, parts) {
   const value = fields.discount_value;
   value.disabled = type === 'none';
   value.required = !value.disabled;
+  markRequiredFields(form);
   const grossLine = (price, quantity, rate) => {
     const base = Math.round(Number(price) * 100) * Math.round(Number(quantity) * 1000);
     const paise = Math.round(base / 1000);
@@ -613,6 +687,16 @@ function renderBilling({completed,invoices}) {
   for (const button of $('content').querySelectorAll('[data-invoice-print]')) button.onclick = () => printInvoice(invoices.find(b=>b.id===button.dataset.invoicePrint));
   for (const button of $('content').querySelectorAll('[data-invoice-pay]')) button.onclick = () => paymentModal(invoices.find(b=>b.id===button.dataset.invoicePay),'invoice_id');
 }
+
+$('menu-toggle').onclick = () => {
+  const open = document.body.classList.toggle('menu-open');
+  $('menu-toggle').setAttribute('aria-expanded',String(open));
+  $('sidebar-backdrop').hidden = !open;
+};
+$('close-sidebar').onclick = closeSidebar;
+$('sidebar-backdrop').onclick = closeSidebar;
+document.addEventListener('keydown',event => { if (event.key === 'Escape') closeSidebar(); });
+markRequiredFields();
 
 $('close-dialog').onclick = () => $('dialog').close();
 $('logout').onclick = async () => {

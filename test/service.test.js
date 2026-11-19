@@ -100,3 +100,35 @@ test('ticket dashboard filters Billed and Paid and keeps settled tickets out of 
   assert.equal((await request('dashboard',{openOnly:true},{authorization:'Bearer test-token'})).status,200);
   assert.equal(queries.at(-1).get('status'),'in.(New,Assigned,In Progress,Awaiting Parts)');
 });
+
+test('item master pages are limited to 50 and search includes code, description, brand and model',async () => {
+  globalThis.fetch = async (url,init) => {
+    const target = new URL(url);
+    if (target.pathname === '/auth/v1/user') return Response.json({id:key});
+    if (target.pathname === '/rest/v1/staff') return Response.json([{user_id:key,name:'Test Manager',role:'manager'}]);
+    assert.equal(target.pathname,'/rest/v1/items');
+    assert.equal(target.searchParams.get('offset'),'50');
+    assert.equal(target.searchParams.get('limit'),'50');
+    assert.equal(target.searchParams.get('order'),'code.asc');
+    assert.match(new Headers(init.headers).get('prefer'),/count=exact/);
+    for (const column of ['code','description','brand','model']) {
+      assert.ok(target.searchParams.get('or').includes(column+'.ilike."%LG%"'));
+    }
+    return Response.json([{id:key,code:'PART-051'}],{headers:{'content-range':'50-50/101'}});
+  };
+  const result = await request('items',{search:'LG',offset:50},{authorization:'Bearer test-token'});
+  assert.equal(result.status,200);
+  assert.equal(result.body.result.total,101);
+  assert.equal(result.body.result.limit,50);
+  assert.equal(result.body.result.offset,50);
+  assert.equal(result.body.result.items[0].code,'PART-051');
+});
+
+test('item customer price is optional and brand and model remain optional',() => {
+  const item = {code:'P-01',description:'Repair part',uom:'Piece',purchase_price:100,tax_rate:18};
+  assert.equal(forms.item.parse(item).sale_price,null);
+  assert.equal(forms.item.parse({...item,sale_price:null}).sale_price,null);
+  assert.equal(forms.item.parse({...item,sale_price:0}).sale_price,0);
+  assert.equal(forms.item.safeParse({...item,sale_price:-1}).success,false);
+  assert.equal(forms.item.parse({...item,brand:'LG',model:'ABC-01'}).model,'ABC-01');
+});

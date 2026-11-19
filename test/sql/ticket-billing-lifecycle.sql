@@ -14,8 +14,11 @@ declare
   number integer;
   actual text;
 begin
-  insert into public.items(id,code,description,uom,purchase_price,sale_price,tax_rate)
-    values(item,'TEST-'||item,'Lifecycle regression fixture','Piece',10,500,0);
+  insert into public.items(id,code,description,uom,purchase_price,sale_price,tax_rate,brand,model)
+    values(item,'TEST-'||item,'Lifecycle regression fixture','Piece',10,null,0,'LG','Lifecycle model');
+  if not exists(select 1 from public.items where id = item and sale_price is null and brand = 'LG' and model = 'Lifecycle model') then
+    raise exception 'Optional customer price, brand or model was not saved';
+  end if;
   select n into number from generate_series(99999,99000,-1) n
     where not exists(select 1 from public.service_tickets where ticket_number = n) limit 1;
   insert into public.service_tickets(id,ticket_number,customer_name,mobile,locality,service_address,

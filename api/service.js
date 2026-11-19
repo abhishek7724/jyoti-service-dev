@@ -241,6 +241,8 @@ async function staffAction(action, req, input) {
   requireRole(staff,...financeRoles);
   switch (action) {
     case 'catalog': return catalog(db);
+    case 'items': return itemMaster(db,input);
+    case 'suppliers': return {suppliers:await read(db.from('suppliers').select('*').order('name'))};
     case 'item': return read(db.from('items').upsert(parse(forms.item,input),{onConflict:'code'}).select('id').single());
     case 'supplier': return read(db.from('suppliers').insert(parse(forms.supplier,input)).select('id').single());
     case 'purchases': return purchases(db);
@@ -278,6 +280,21 @@ async function staffAction(action, req, input) {
     }
     default: throw new HttpError(404,'Unknown action');
   }
+}
+
+async function itemMaster(db,input) {
+  const limit = 50;
+  const offset = input.offset ?? 0;
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > 10000000) throw new HttpError(422,'Choose a valid item page');
+  if (input.search !== undefined && (typeof input.search !== 'string' || input.search.length > 100)) throw new HttpError(422,'Search must contain at most 100 characters');
+  const search = (input.search || '').trim();
+  let query = db.from('items').select('*',{count:'exact'}).order('code').range(offset,offset+limit-1);
+  if (search) {
+    const pattern = JSON.stringify('%'+search.replace(/[\\%_]/g,character=>'\\'+character)+'%');
+    query = query.or(['code','description','brand','model'].map(column=>column+'.ilike.'+pattern).join(','));
+  }
+  const result = await query;
+  return {items:await read(result),total:result.count ?? 0,offset,limit};
 }
 
 async function catalog(db) {
