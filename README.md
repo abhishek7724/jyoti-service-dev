@@ -1,6 +1,6 @@
 # Jyoti Service
 
-Jyoti Refrigeration's public booking page and the Jyoti Service Desk staff portal. Supabase stores operational data and authenticates staff. Vercel serves the site and its API.
+Jyoti Refrigeration's public booking page and the Jyoti Service Desk staff portal. Supabase stores operational data and authenticates staff. Vercel currently serves the live site and its API. Cloudflare deployment support is prepared separately; see [Cloudflare migration](docs/cloudflare-migration.md).
 
 ## Workflows
 
