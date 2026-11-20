@@ -3,7 +3,9 @@
   "name": "jyoti-service",
   "main": "cloudflare/worker.js",
   "compatibility_date": "2026-11-20",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
   "workers_dev": true,
   "preview_urls": false,
   "assets": {
@@ -11,8 +13,19 @@
     "binding": "ASSETS",
     "html_handling": "auto-trailing-slash",
     "not_found_handling": "none",
-    "run_worker_first": ["/api", "/api/*"]
+    "run_worker_first": [
+      "/api",
+      "/api/*"
+    ]
   },
-  "observability": {"enabled": true},
-  "keep_vars": true
+  "observability": {
+    "enabled": true
+  },
+  "keep_vars": true,
+  "routes": [
+    {
+      "pattern": "jyoti.krivyo.com",
+      "custom_domain": true
+    }
+  ]
 }

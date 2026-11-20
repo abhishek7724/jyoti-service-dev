@@ -89,8 +89,8 @@ real-device notifications and free-tier CPU profiling remain required.
 ## Deployment status - 20 November 2026
 
 - Worker: `jyoti-service`, Krivyo account `76765c7097044b6b30cef91fa05408b8`.
-- Public portal: https://jyoti-service.abhishek-767.workers.dev/
-- Staff portal: https://jyoti-service.abhishek-767.workers.dev/staff
+- Public portal: https://jyoti.krivyo.com/
+- Staff portal: https://jyoti.krivyo.com/staff
 - Worker code/assets deployed through the Cloudflare API; GitHub automatic
   builds are not configured yet. The migration branch is the source of truth.
 - Supabase server key entered by the owner as an encrypted Worker secret.
@@ -111,3 +111,16 @@ real-device notifications and free-tier CPU profiling remain required.
   existing account passwords were moved or recreated.
 - Vercel remains available as a fallback. Real-phone locked-screen push delivery,
   a full PDF WhatsApp delivery and free-tier CPU profiling remain to be verified.
+
+## Branded domain
+
+`jyoti.krivyo.com` is attached directly to the `jyoti-service` Worker as a
+Custom Domain in the active `krivyo.com` zone. DNS and HTTPS are managed by
+Cloudflare. The Worker health check returned 200 on this hostname; its staff
+sign-in page was verified in the browser.
+
+Invoice callbacks now target `https://jyoti.krivyo.com/api/whatsapp-invoice`.
+The existing workers.dev address remains available as a fallback. New PWA
+installs and notification permissions should use the branded domain.
+`wrangler.jsonc` includes the custom domain so subsequent CLI deployments
+preserve this configuration.
