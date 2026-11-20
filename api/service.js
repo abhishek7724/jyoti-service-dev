@@ -140,6 +140,10 @@ async function staffAction(action, req, input) {
       if (!/^[1-9][0-9]{4}$/.test(String(input.ticket))) throw new HttpError(422, 'Enter a five-digit ticket number');
       query = query.eq('ticket_number', Number(input.ticket));
     }
+    if (input.technician !== undefined && input.technician !== '') {
+      requireRole(staff,'manager');
+      query = input.technician === 'unassigned' ? query.is('assigned_to',null) : query.eq('assigned_to',parse(uuid,input.technician));
+    }
     const [tickets, technicians] = await Promise.all([
       read(query),
       staff.role === 'manager' ? read(userDb.from('staff').select('user_id,name').eq('role','technician').eq('active',true).order('name')) : [],

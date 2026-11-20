@@ -174,3 +174,25 @@ test('awaiting ticket dashboard includes its existing PO so creation can be disa
   const result=await request('dashboard',{}, {authorization:'Bearer test-token'});
   assert.equal(result.status,200);assert.equal(result.body.result.tickets[0].purchase_order.po_number,10001);
 });
+
+test('manager technician filter intersects ticket and status filters and supports unassigned',async()=>{
+  const technician='aaaaaaaa-0000-4000-8000-000000000002';let query;
+  globalThis.fetch=async url=>{
+    const u=new URL(url);
+    if(u.pathname==='/auth/v1/user')return Response.json({id:key});
+    if(u.pathname==='/rest/v1/staff')return Response.json(u.searchParams.get('select').includes('role')?[{user_id:key,name:'Manager',role:'manager'}]:[]);
+    assert.equal(u.pathname,'/rest/v1/service_tickets');query=u.searchParams;return Response.json([]);
+  };
+  let result=await request('dashboard',{technician,ticket:'10001',status:'In Progress',offset:75},{authorization:'Bearer test-token'});
+  assert.equal(result.status,200);assert.equal(query.get('assigned_to'),'eq.'+technician);assert.equal(query.get('ticket_number'),'eq.10001');assert.equal(query.get('status'),'eq.In Progress');assert.equal(query.get('offset'),'75');
+  result=await request('dashboard',{technician:'unassigned',openOnly:true},{authorization:'Bearer test-token'});
+  assert.equal(result.status,200);assert.equal(query.get('assigned_to'),'is.null');assert.match(query.get('status'),/^in\./);
+  result=await request('dashboard',{technician:'',status:'Paid'},{authorization:'Bearer test-token'});
+  assert.equal(result.status,200);assert.equal(query.has('assigned_to'),false);assert.equal(query.get('status'),'eq.Paid');
+  assert.equal((await request('dashboard',{technician:'invalid'},{authorization:'Bearer test-token'})).status,422);
+});
+
+test('technician accounts cannot use the manager assignment filter',async()=>{
+  globalThis.fetch=async url=>new URL(url).pathname==='/auth/v1/user'?Response.json({id:key}):Response.json([{user_id:key,name:'Technician',role:'technician'}]);
+  assert.equal((await request('dashboard',{technician:key},{authorization:'Bearer test-token'})).status,403);
+});

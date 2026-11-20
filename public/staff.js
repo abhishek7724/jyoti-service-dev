@@ -27,6 +27,7 @@ let filter = /^[1-9][0-9]{4}$/.test(originalTicket) ? originalTicket : '';
 let ticketScope = filter ? 'all' : 'open';
 const ticketStatuses = ['New','Assigned','Accepted','Assignment Rejected','In Progress','Inspection Complete','Awaiting Parts','Repair Complete','Paid, not billed','Billed','Paid'];
 let offset = 0;
+let technicianFilter = '';
 let detailTicketId = null;
 let pendingTicketNumber = filter;
 const completedStatuses = ['Repair Complete','Paid, not billed','Billed','Paid'];
@@ -173,7 +174,7 @@ async function load({silent=false}={}) {
   }
   try {
     const data = await request(selectedPage === 'tickets' ? (detailTicketId ? 'ticketDetail' : 'dashboard') : selectedPage,
-      selectedPage === 'tickets' && detailTicketId ? {id:detailTicketId} : selectedPage === 'tickets' ? { offset, openOnly:ticketScope === 'open', status:ticketStatuses.includes(ticketScope) ? ticketScope : undefined, ticket:filter } :
+      selectedPage === 'tickets' && detailTicketId ? {id:detailTicketId} : selectedPage === 'tickets' ? { offset, openOnly:ticketScope === 'open', status:ticketStatuses.includes(ticketScope) ? ticketScope : undefined, ticket:filter,technician:user?.role === 'manager' ? technicianFilter : undefined } :
         selectedPage === 'items' ? { offset:itemOffset,search:itemSearch } : selectedPage === 'staff' ? {offset:staffOffset,search:staffSearch} : selectedPage === 'billing' ? {...billingState} : {});
     if (generation !== pageGeneration) return false;
     const view=JSON.stringify([selectedPage,detailTicketId,data]);
@@ -261,7 +262,9 @@ function renderTickets({tickets,technicians,pushKey,limit}) {
   const technicianOptions = [['','Unassigned'],...technicians.map(t => [t.user_id,t.name])];
   $('content').innerHTML = '<form id="ticket-filter" class="inline-form">' +
     input('Ticket number','ticket','inputmode="numeric" pattern="[1-9][0-9]{4}" maxlength="5" value="'+e(filter)+'"') +
-    select('Status','scope',[['open','Open tickets'],['all','All statuses'],...ticketStatuses],ticketScope) + submitButton('Search') + btn('Refresh','refresh-tickets',true) + '</form>' +
+    select('Status','scope',[['open','Open tickets'],['all','All statuses'],...ticketStatuses],ticketScope) +
+    (user.role === 'manager' ? select('Technician','technician',[['','All technicians'],['unassigned','Unassigned'],...technicians.map(t=>[t.user_id,t.name])],technicianFilter).replace(' required','') : '')+
+    submitButton('Search') + btn('Refresh','refresh-tickets',true) + '</form>' +
     (tickets.length ? '<div class="list">'+tickets.map(t => {
       const actions = [];
       if (user.role === 'manager' && !['Repair Complete','Paid, not billed','Billed','Paid'].includes(t.status)) {
@@ -282,6 +285,7 @@ function renderTickets({tickets,technicians,pushKey,limit}) {
     pendingTicketNumber = '';
     filter = data.ticket;
     ticketScope = filter && data.scope === 'open' ? 'all' : data.scope;
+    if(user.role === 'manager')technicianFilter = data.technician || '';
     offset = 0;
     await load();
   });
