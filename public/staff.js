@@ -535,7 +535,7 @@ function newStaff() {
   modal('Create staff account',input('Name','name','required maxlength="100"')+
     input('Mobile number','mobile_number','required type="tel" inputmode="numeric" pattern="[6-9][0-9]{9}" maxlength="10"')+
     input('Username','username','required minlength="3" maxlength="32" pattern="[a-zA-Z0-9][a-zA-Z0-9._\\-]{2,31}" autocomplete="off"')+
-    input('Temporary password','password','required type="password" minlength="10" maxlength="72" autocomplete="new-password"')+
+    input('Set four-digit PIN','pin','required type="password" inputmode="numeric" pattern="[0-9]{4}" minlength="4" maxlength="4" autocomplete="new-password"')+
     select('Role','role',[['technician','Technician'],['manager','Manager'],['billing','Billing']]),'Create account',async data => {
       const result = await request('createStaff',data);
       return result.name+' can sign in as '+result.username;
@@ -545,10 +545,16 @@ function newStaff() {
 function renderStaff({staff,total,limit,offset:currentOffset}){
   $('page-actions').innerHTML=btn('Add staff','add-staff');$('add-staff').onclick=newStaff;
   const roleName=role=>({technician:'Technician',manager:'Manager',billing:'Billing'}[role] || role);
-  $('content').innerHTML='<form id="staff-search" class="inline-form master-search">'+input('Search staff','search','type="search" maxlength="100" placeholder="Name, username or mobile" value="'+e(staffSearch)+'"')+submitButton('Search')+'</form><section class="panel"><p class="meta">'+(total ? 'Showing '+(currentOffset+1)+'–'+(currentOffset+staff.length)+' of '+total+' staff' : 'No staff found')+'</p><div class="table-wrap"><table><thead><tr><th>Name</th><th>Username</th><th>Mobile number</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>'+staff.map(person=>'<tr><td>'+e(person.name)+'</td><td>'+e(person.username || '—')+'</td><td>'+(person.mobile_number ? '<a href="tel:+91'+e(person.mobile_number)+'">'+e(person.mobile_number)+'</a>' : '—')+'</td><td>'+e(roleName(person.role))+'</td><td>'+e(person.active ? 'Active' : 'Inactive')+'</td><td><button type="button" class="secondary" data-staff-edit="'+e(person.user_id)+'">Edit</button></td></tr>').join('')+'</tbody></table></div></section><div class="pagination"><span class="meta">Page '+(Math.floor(currentOffset/limit)+1)+' of '+Math.max(1,Math.ceil(total/limit))+'</span><div class="actions">'+(currentOffset ? btn('Previous','staff-prev',true) : '')+(currentOffset+limit<total ? btn('Next','staff-next',true) : '')+'</div></div>';
+  $('content').innerHTML='<form id="staff-search" class="inline-form master-search">'+input('Search staff','search','type="search" maxlength="100" placeholder="Name, username or mobile" value="'+e(staffSearch)+'"')+submitButton('Search')+'</form><section class="panel"><p class="meta">'+(total ? 'Showing '+(currentOffset+1)+'–'+(currentOffset+staff.length)+' of '+total+' staff' : 'No staff found')+'</p><div class="table-wrap"><table><thead><tr><th>Name</th><th>Username</th><th>Mobile number</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>'+staff.map(person=>'<tr><td>'+e(person.name)+'</td><td>'+e(person.username || '—')+'</td><td>'+(person.mobile_number ? '<a href="tel:+91'+e(person.mobile_number)+'">'+e(person.mobile_number)+'</a>' : '—')+'</td><td>'+e(roleName(person.role))+'</td><td>'+e(person.active ? 'Active' : 'Inactive')+'</td><td><button type="button" class="secondary" data-staff-edit="'+e(person.user_id)+'">Edit</button> <button type="button" class="secondary" data-staff-pin="'+e(person.user_id)+'">Reset PIN</button></td></tr>').join('')+'</tbody></table></div></section><div class="pagination"><span class="meta">Page '+(Math.floor(currentOffset/limit)+1)+' of '+Math.max(1,Math.ceil(total/limit))+'</span><div class="actions">'+(currentOffset ? btn('Previous','staff-prev',true) : '')+(currentOffset+limit<total ? btn('Next','staff-next',true) : '')+'</div></div>';
   submit($('staff-search'),async values=>{staffSearch=values.search.trim();staffOffset=0;await load();});
   if($('staff-prev'))$('staff-prev').onclick=()=>{staffOffset=Math.max(0,currentOffset-limit);load();};
   if($('staff-next'))$('staff-next').onclick=()=>{staffOffset=currentOffset+limit;load();};
+  for(const button of $('content').querySelectorAll('[data-staff-pin]'))button.onclick=()=>{
+    const person=staff.find(row=>row.user_id === button.dataset.staffPin);
+    modal('Reset PIN · '+person.name,input('New four-digit PIN','pin','required type="password" inputmode="numeric" pattern="[0-9]{4}" minlength="4" maxlength="4" autocomplete="new-password"'),'Reset PIN',async values=>{
+      await request('resetStaffPin',{user_id:person.user_id,pin:values.pin});return 'PIN reset for '+person.name;
+    });
+  };
   for(const button of $('content').querySelectorAll('[data-staff-edit]'))button.onclick=()=>{
     const person=staff.find(row=>row.user_id === button.dataset.staffEdit);
     modal('Edit staff',input('Name','name','required maxlength="100" value="'+e(person.name)+'"')+
@@ -772,7 +778,7 @@ function renderItems({items,total,limit,offset:currentOffset}) {
     '<p class="meta">'+(total ? 'Showing '+(currentOffset+1)+'–'+(currentOffset+items.length)+' of '+total+' items' : 'No matching items')+'</p>'+
     '<div class="table-wrap"><table><thead><tr><th>Item code</th><th>Description</th><th>Brand</th><th>Model</th><th>Unit</th><th>Purchase price</th><th>Customer price</th><th></th></tr></thead><tbody>'+
     items.map(item=>'<tr><td>'+e(item.code)+'</td><td>'+e(item.description)+'</td><td>'+e(item.brand || '—')+'</td><td>'+e(item.model || '—')+'</td><td>'+e(item.uom)+'</td><td>'+money(item.purchase_price)+'</td><td>'+
-      (item.sale_price == null ? '—' : money(item.sale_price))+'</td><td><button class="secondary" data-item="'+e(item.id)+'">Edit</button></td></tr>').join('')+
+      (item.sale_price == null ? '—' : money(item.sale_price))+'</td><td><button class="secondary" data-item="'+e(item.id)+'">Edit</button> <button type="button" class="secondary" data-staff-pin="'+e(person.user_id)+'">Reset PIN</button></td></tr>').join('')+
     '</tbody></table></div>'+(items.length ? '' : '<p class="muted">'+(itemSearch ? 'Try another item code, description, brand or model.' : 'Add the parts you buy and use in repairs.')+'</p>')+'</section>'+
     '<div class="pagination"><span class="meta">Page '+(Math.floor(currentOffset/limit)+1)+' of '+Math.max(1,Math.ceil(total/limit))+'</span><div class="actions">'+
     (currentOffset ? btn('Previous','items-prev',true) : '')+(currentOffset+limit<total ? btn('Next','items-next',true) : '')+'</div></div>';

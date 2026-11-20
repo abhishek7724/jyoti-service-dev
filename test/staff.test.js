@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import handler from '../api/service.js';
 import {forms} from '../lib/validation.js';
 const id='aaaaaaaa-0000-4000-8000-000000000001',other='aaaaaaaa-0000-4000-8000-000000000002',original=globalThis.fetch;
-Object.assign(process.env,{SUPABASE_URL:'https://db.example.invalid',SUPABASE_PUBLISHABLE_KEY:'test-only',SUPABASE_SERVICE_ROLE_KEY:'test-only'});
+Object.assign(process.env,{SUPABASE_URL:'https://db.example.invalid',SUPABASE_PUBLISHABLE_KEY:'test-only',SUPABASE_SERVICE_ROLE_KEY:'test-only',STAFF_PIN_SECRET:'test-only-pin-secret-at-least-32-characters'});
 afterEach(()=>{globalThis.fetch=original;});
 async function call(action,input){const res={setHeader(){},status(code){this.code=code;return this;},json(body){this.body=body;}};await handler({method:'POST',headers:{authorization:'Bearer test-token'},body:{action,input}},res);return res;}
 test('staff creation accepts all three roles and validates India mobile',()=>{
- const input={name:'Fixture',username:'new.user',password:'temporary-password',mobile_number:'9000000000'};
+ const input={name:'Fixture',username:'new.user',pin:'1234',mobile_number:'9000000000'};
  for(const role of ['manager','technician','billing'])assert.equal(forms.staff.safeParse({...input,role}).success,true);
  assert.equal(forms.staff.safeParse({...input,role:'manager',mobile_number:'12345'}).success,false);
 });
@@ -36,6 +36,6 @@ test('manager account creation saves mobile, role and username with the new auth
  if(init.method==='POST'){saved=JSON.parse(init.body);return Response.json(null);}
  return Response.json([{user_id:id,name:'Manager',role:'manager'}]);
  };
- const result=await call('createStaff',{name:'New Manager',username:'newmanager',password:'temporary-password',role:'manager',mobile_number:'9000000000'});
+ const result=await call('createStaff',{name:'New Manager',username:'newmanager',pin:'1234',role:'manager',mobile_number:'9000000000'});
  assert.equal(result.code,200);assert.equal(saved.user_id,other);assert.equal(saved.role,'manager');assert.equal(saved.username,'newmanager');assert.equal(saved.mobile_number,'9000000000');
 });

@@ -32,7 +32,7 @@
 <h1>Staff sign in</h1>
 <form id="login-form" class="grid">
 <label>Username<input name="username" type="text" required autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" enterkeyhint="next"></label>
-<label>Password<input name="password" type="password" required autocomplete="current-password" enterkeyhint="go"></label>
+<label>PIN<input name="pin" type="password" inputmode="numeric" pattern="[0-9]{4}" minlength="4" maxlength="4" required autocomplete="current-password" enterkeyhint="go"></label>
 <button>Sign in</button>
 </form>
 </section>

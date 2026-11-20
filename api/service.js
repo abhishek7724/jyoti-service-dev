@@ -1,4 +1,5 @@
 import { createHmac } from 'node:crypto';
+import {pinPassword} from '../lib/staff-pin.js';
 import { sendAssignmentAlerts } from '../lib/push.js';
 import { HttpError, clients, read, requireRole, staffSession } from '../lib/db.js';
 import { forms, mobile, staffEmail, ticket, uuid, validatePushEndpoint } from '../lib/validation.js';
@@ -62,11 +63,11 @@ async function publicAction(action, req, input) {
   if (action === 'login') {
     await rateLimit(db, req, action, 30);
     if (typeof input.username !== 'string' || !input.username.trim() || input.username.length > 150 ||
-        typeof input.password !== 'string' || input.password.length > 100) throw new HttpError(422, 'Enter your staff username and password');
+        typeof input.pin !== 'string' || !/^[0-9]{4}$/.test(input.pin)) throw new HttpError(422, 'Enter your staff username and four-digit PIN');
     const email = staffEmail(input.username);
-    await rateLimit(db, req, 'login-account', 10, email);
-    const { data, error } = await userDb.auth.signInWithPassword({ email, password: input.password });
-    if (error || !data.session) throw new HttpError(401, 'Incorrect staff username or password');
+    await rateLimit(db, req, 'login-account', 5, email);
+    const { data, error } = await userDb.auth.signInWithPassword({ email, password: pinPassword(email,input.pin) });
+    if (error || !data.session) throw new HttpError(401, 'Incorrect staff username or PIN');
     const staff = await read(db.from('staff').select('user_id').eq('user_id', data.user.id).eq('active', true).maybeSingle());
     if (!staff) throw new HttpError(403, 'This account has no active staff access');
     return sessionView(data.session);
@@ -210,10 +211,22 @@ async function staffAction(action, req, input) {
     requireRole(staff,'manager');const data=parse(forms.staffProfile,input);
     await read(db.rpc('update_staff_profile',{p_actor:staff.user_id,p_user:data.user_id,p_name:data.name,p_mobile:data.mobile_number,p_role:data.role}));return {saved:true};
   }
+  if(action === 'resetStaffPin'){
+    requireRole(staff,'manager');
+    const data=parse(forms.staffPin,input);
+    await rateLimit(db,req,'staff-pin-reset',20,staff.user_id);
+    const target=await read(db.from('staff').select('user_id').eq('user_id',data.user_id).maybeSingle());
+    if(!target)throw new HttpError(404,'Staff account not found');
+    const identity=await db.auth.admin.getUserById(target.user_id);
+    if(identity.error || !identity.data.user?.email)throw new HttpError(503,'Staff identity could not be loaded');
+    const result=await db.auth.admin.updateUserById(target.user_id,{password:pinPassword(identity.data.user.email,data.pin)});
+    if(result.error)throw new HttpError(503,'PIN could not be reset. Try again.');
+    return {saved:true};
+  }
   if (action === 'createStaff') {
     requireRole(staff, 'manager');
-    const { username, password, name, role,mobile_number } = parse(forms.staff, input);
-    const { data, error } = await db.auth.admin.createUser({ email: staffEmail(username), password, email_confirm: true });
+    const { username, pin, name, role,mobile_number } = parse(forms.staff, input);
+    const { data, error } = await db.auth.admin.createUser({ email: staffEmail(username), password: pinPassword(staffEmail(username),pin), email_confirm: true });
     if (error || !data.user) throw new HttpError(error?.status === 422 ? 409 : 422, error?.status === 422 ? 'That username may already be in use' : 'Staff account could not be created');
     try {
       await read(db.from('staff').insert({ user_id: data.user.id, name, role,username,mobile_number }));
