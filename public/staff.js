@@ -864,6 +864,7 @@ function updateInvoiceDraft(form, parts) {
 }
 
 function editIssuedInvoice(bill){
+  const received=Math.round((bill.payments || []).reduce((sum,payment)=>sum+Number(payment.amount),0)*100)/100;
   const fields=input('Customer name','customer_name','required maxlength="100" value="'+e(bill.customer_name)+'"')+
     '<label>Bill To / Ship To address<textarea name="service_address" required maxlength="1000" rows="3">'+e(bill.service_address)+'</textarea></label>'+
     input('Customer GSTIN (optional)','gstin','maxlength="15" value="'+e(bill.customer_gstin || '')+'"')+
@@ -872,8 +873,10 @@ function editIssuedInvoice(bill){
       input('Tax rate %','rate-'+index,'type="number" min="0" max="100" step="0.01" required value="'+e(line.tax_rate)+'"')+'</div></section>').join('')+
     '<div class="pair">'+select('Discount','discount_type',[['none','No discount'],['percent','Percentage (%)'],['fixed','Fixed amount (₹)']],Number(bill.discount_amount)>0?'fixed':'none')+
     input('Discount value','discount_value','type="number" min="0" step="0.01" value="'+e(bill.discount_amount || 0)+'"')+'</div><div data-revision-summary aria-live="polite"></div>'+
-    '<label>Correction note (optional)<textarea name="note" maxlength="500" rows="2"></textarea></label><p class="meta">The invoice number stays the same. Saving updates the printable invoice; a WhatsApp copy already sent will not change.</p>';
+    '<label>Correction note (optional)<textarea name="note" maxlength="500" rows="2"></textarea></label><p class="meta">The invoice number and recorded payments stay the same. The corrected total must cover payments already received. A WhatsApp copy already sent will not change.</p>';
   const form=modal('Edit invoice '+bill.number,fields,'Save correction',async values=>{
+    update();
+    if(Number(form.dataset.correctedTotal)<received)throw new Error('Corrected total cannot be less than the amount already received.');
     const updated=await request('reviseInvoice',{invoice_id:bill.id,revision:bill.revision || 1,customer_name:values.customer_name,service_address:values.service_address,gstin:values.gstin,
       prices:bill.lines.map((line,index)=>({line_index:index,unit_price:Number(values['price-'+index]),tax_rate:Number(values['rate-'+index])})),
       discount_type:values.discount_type,discount_value:Number(values.discount_value || 0),note:values.note});
@@ -889,7 +892,8 @@ function editIssuedInvoice(bill){
     const entered=Math.round(Number(value.value)*100),discount=type==='none'?0:type==='fixed'?entered:Math.round(gross*entered/10000);
     value.max=type==='percent'?'100':String(gross/100);
     const percent=type==='percent'?Number(value.value):gross?discount/gross*100:0;
-    form.querySelector('[data-revision-summary]').innerHTML='<p>Total before discount '+money(gross/100)+'</p>'+(type==='none'?'':'<p>Discount ('+percent.toFixed(2)+'%) −'+money(discount/100)+'</p>')+(value.validity.valid?'<p><strong>Amount payable '+money((gross-discount)/100)+'</strong></p>':'');
+    form.dataset.correctedTotal=String((gross-discount)/100);
+    form.querySelector('[data-revision-summary]').innerHTML='<p>Total before discount '+money(gross/100)+'</p>'+(type==='none'?'':'<p>Discount ('+percent.toFixed(2)+'%) −'+money(discount/100)+'</p>')+(value.validity.valid?'<p>Corrected invoice total '+money((gross-discount)/100)+'</p><p>Already received '+money(received)+'</p><p><strong>Remaining amount '+money(Math.max(0,(gross-discount)/100-received))+'</strong></p>'+((gross-discount)/100<received?'<p class="invoice-correction-error">Corrected total cannot be less than the amount already received.</p>':''):'');
     markRequiredFields(form);
   };
   form.addEventListener('input',update);form.addEventListener('change',update);update();
@@ -902,13 +906,13 @@ function renderBilling({completed,invoices}) {
     '<section class="panel"><h2>Issued invoices</h2>'+
     (invoices.length ? invoices.map(b=>{
       const due = payable(b);
-      const received = (b.payments || []).reduce((sum,p)=>sum+Number(p.amount),0);
+      const received = Math.round((b.payments || []).reduce((sum,p)=>sum+Number(p.amount),0)*100)/100;
       const excess = Math.max(0,Math.round((received-Number(b.total))*100)/100);
       const state = !due ? 'Paid' : due === Number(b.total) ? 'Pending payment' : 'Part paid';
       return '<div class="card-actions"><strong>'+e(b.number)+' · '+e(b.customer_name)+'</strong><span class="badge">'+state+'</span> '+'<span>Total '+money(b.total)+' · Received '+money(received)+' · Remaining '+money(due)+'</span>'+
         (excess > 0 ? '<span class="excess-payment">Excess '+money(excess)+' · refund or credit required</span>' : '')+
         '<button class="secondary" data-invoice-print="'+e(b.id)+'">Print / PDF</button>'+
-        (!(b.payments || []).length ? '<button type="button" class="secondary icon-button" data-invoice-edit="'+e(b.id)+'" aria-label="Edit invoice '+e(b.number)+'" title="Edit invoice"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M16 3l5 5-12 12H4v-5zM14 5l5 5"/></svg></button>' : '')+
+        (received===0 || received<Number(b.total) ? '<button type="button" class="secondary icon-button" data-invoice-edit="'+e(b.id)+'" aria-label="Edit invoice '+e(b.number)+'" title="Edit invoice"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M16 3l5 5-12 12H4v-5zM14 5l5 5"/></svg></button>' : '')+
         (due>0?'<button data-invoice-pay="'+e(b.id)+'">Record payment</button>' +
           (b.service_tickets?.mobile ? '<a href="tel:+91'+e(b.service_tickets.mobile)+'">Call customer</a>' : '') : '')+'</div>';
     }).join('') : '<p class="muted">No invoices issued yet.</p>')+'</section>';

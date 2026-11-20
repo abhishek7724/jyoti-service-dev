@@ -60,7 +60,8 @@ test('approved template uploads a private invoice PDF and sends its exact media 
   assert.equal(res.code,200);assert.equal(finished,true);assert.equal(sent.template.components[0].parameters[0].document.id,'media-test');
  }finally{globalThis.fetch=realFetch;}
 });
-test('temporary reply-window test sends a document while template is pending',async()=>{
+test('temporary reply-window test sends a document while template is pending',async t=>{
+ t.mock.timers.enable({apis:['Date'],now:new Date('2026-11-19T12:00:00Z')});
  const realFetch=globalThis.fetch,token='test-only-secret';let sent,uploaded=false,finished=false;
  Object.assign(process.env,{SUPABASE_URL:'https://db.example.invalid',SUPABASE_PUBLISHABLE_KEY:'test-only',SUPABASE_SERVICE_ROLE_KEY:'test-only'});
  const body={action:'send_session_test',invoice_id:bill.id,timestamp:String(Math.floor(Date.now()/1000))};

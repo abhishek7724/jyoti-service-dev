@@ -30,11 +30,11 @@ begin
  prices:='[{"line_index":0,"unit_price":1000,"tax_rate":18},{"line_index":1,"unit_price":500,"tax_rate":0}]';
  bill:=public.revise_unpaid_invoice(bill.id,actor,3,'Correct customer','Correct address','',prices,'fixed',250,'GST correction');
  if bill.total<>1430 or bill.subtotal+bill.cgst+bill.sgst+bill.rounding_adjustment<>1430 or bill.revision<>4 then raise exception 'GST correction did not reconcile';end if;
- perform public.record_payment(gen_random_uuid(),bill.id,null,100,'Cash','Revision fixture');
+ perform public.record_payment(gen_random_uuid(),bill.id,null,bill.total,'Cash','Revision fixture');
  begin
   perform public.revise_unpaid_invoice(bill.id,actor,4,'Correct customer','Correct address','',prices,'none',0,'');
   raise exception 'Regression: paid invoice edited';
- exception when raise_exception then if sqlerrm<>'This invoice has a recorded payment and can no longer be edited' then raise;end if;end;
+ exception when raise_exception then if sqlerrm<>'Fully paid invoices can no longer be edited' then raise;end if;end;
  if (select count(*) from public.invoice_revision_history where invoice_id=bill.id )<>3 then raise exception 'Unexpected revision history';end if;
  if has_function_privilege('authenticated','public.revise_unpaid_invoice(uuid,uuid,integer,text,text,text,jsonb,text,numeric,text)','execute')then raise exception 'Invoice revision exposed to direct calls';end if;
 end $$;
