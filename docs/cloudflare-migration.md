@@ -52,7 +52,7 @@ Local test credentials belong in gitignored `.dev.vars` files only.
 
 ## WhatsApp callback and domain cutover
 
-The database's invoice-notification function currently calls the Vercel endpoint.
+The database's invoice-notification function now calls the Cloudflare endpoint. On future domain changes,
 Inspect its live definition and change **only** the callback URL to the final
 Cloudflare origin after the Cloudflare callback has passed verification. Keep
 the signature validation, deduplication and restrictions unchanged. Retain the
@@ -85,3 +85,29 @@ Supabase requests, rate-limit crypto, unauthorized access, assignment VAPID
 encryption/HTTPS transport, and signed WhatsApp callback PDF creation/upload.
 It sends no actual messages and changes no live data. Live account deployment,
 real-device notifications and free-tier CPU profiling remain required.
+
+## Deployment status - 20 November 2026
+
+- Worker: `jyoti-service`, Krivyo account `76765c7097044b6b30cef91fa05408b8`.
+- Public portal: https://jyoti-service.abhishek-767.workers.dev/
+- Staff portal: https://jyoti-service.abhishek-767.workers.dev/staff
+- Worker code/assets deployed through the Cloudflare API; GitHub automatic
+  builds are not configured yet. The migration branch is the source of truth.
+- Supabase server key entered by the owner as an encrypted Worker secret.
+  Its value was never read back. Existing invoice issuer settings were copied
+  with explicit owner authorization; secrets are not stored in GitHub.
+- A new Cloudflare VAPID key pair and rate-limit secret were configured.
+  All technicians must open/install this origin and allow assignment alerts
+  once. Managers should assign through this origin too; Vercel uses its old keys.
+- Live health returned 200. Live tracking returned 200 through Cloudflare and
+  Supabase, and the browser showed the expected no-match result for a deliberately
+  nonexistent ticket. Staff sign-in rendered successfully; a full staff session
+  has not yet been tested on this origin.
+- A signed callback from Supabase for a nonexistent invoice returned
+  `already_processed` (200), verifying server authentication, Meta template
+  lookup and deduplication without sending a message or creating an invoice.
+- The invoice dispatcher callback was changed to Cloudflare by migration
+  `route_invoice_notifications_through_cloudflare`. No database records or
+  existing account passwords were moved or recreated.
+- Vercel remains available as a fallback. Real-phone locked-screen push delivery,
+  a full PDF WhatsApp delivery and free-tier CPU profiling remain to be verified.
