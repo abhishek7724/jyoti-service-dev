@@ -124,3 +124,17 @@ The existing workers.dev address remains available as a fallback. New PWA
 installs and notification permissions should use the branded domain.
 `wrangler.jsonc` includes the custom domain so subsequent CLI deployments
 preserve this configuration.
+
+## Billing workspace update
+
+Billing now separates Ready to bill and Issued invoices. The issued list uses
+aligned financial columns and accessible icons for details, Print/PDF, editing,
+payment collection and calling. Fully paid invoice edits and collections stay
+locked; part-paid corrections retain existing receipts.
+
+Search (invoice/customer/ticket/mobile), payment status and date ranges are
+processed by the server-only `billing_workspace` RPC with exact counts and
+10/25/50-row pagination. Excess collections are identified separately and shown
+without negative due balances. Summary tiles cover invoices matching the search
+and date range; the payment-status dropdown filters the table. No invoice or
+payment records are changed by these list operations.

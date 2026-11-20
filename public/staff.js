@@ -1,3 +1,4 @@
+import { billingMarkup } from './billing-table.js';
 import { createLiveUpdates } from './live-updates.js';
 import { printInvoice, printPurchase } from './documents.js';
 import { brandOptions, localityOptions, uomOptions } from './lookups.js';
@@ -31,6 +32,7 @@ let pendingTicketNumber = filter;
 const completedStatuses = ['Repair Complete','Paid, not billed','Billed','Paid'];
 let itemOffset = 0, itemSearch = '';
 let staffOffset=0,staffSearch='';
+const billingState={tab:'invoices',status:'all',search:'',from:'',to:'',limit:25,offset:0};
 let user, refresh, page = 'tickets', pageGeneration = 0, noticeTimer;
 let session;
 let liveUpdates=null,loadingCount=0,pendingWrites=0,lastRenderedView='';
@@ -172,7 +174,7 @@ async function load({silent=false}={}) {
   try {
     const data = await request(selectedPage === 'tickets' ? (detailTicketId ? 'ticketDetail' : 'dashboard') : selectedPage,
       selectedPage === 'tickets' && detailTicketId ? {id:detailTicketId} : selectedPage === 'tickets' ? { offset, openOnly:ticketScope === 'open', status:ticketStatuses.includes(ticketScope) ? ticketScope : undefined, ticket:filter } :
-        selectedPage === 'items' ? { offset:itemOffset,search:itemSearch } : selectedPage === 'staff' ? {offset:staffOffset,search:staffSearch} : {});
+        selectedPage === 'items' ? { offset:itemOffset,search:itemSearch } : selectedPage === 'staff' ? {offset:staffOffset,search:staffSearch} : selectedPage === 'billing' ? {...billingState} : {});
     if (generation !== pageGeneration) return false;
     const view=JSON.stringify([selectedPage,detailTicketId,data]);
     if(silent && (liveRefreshBlocked(true) || view === lastRenderedView))return !liveRefreshBlocked(true);
@@ -899,23 +901,38 @@ function editIssuedInvoice(bill){
   form.addEventListener('input',update);form.addEventListener('change',update);update();
 }
 
-function renderBilling({completed,invoices}) {
-  $('content').innerHTML = '<section class="panel"><h2>Ready to bill</h2>'+
-    (completed.length ? completed.map(t=>'<div class="card-actions"><strong>#'+t.ticket_number+' · '+e(t.customer_name)+'</strong>'+((t.payments || []).length ? '<span class="badge status-unbilled">Received '+money(t.payments.reduce((sum,p)=>sum+Number(p.amount),0))+'</span>' : '')+'<button data-draft="'+e(t.id)+'">Review invoice</button></div>').join('') :
-      '<p class="muted">No completed repairs awaiting billing.</p>')+'</section>'+
-    '<section class="panel"><h2>Issued invoices</h2>'+
-    (invoices.length ? invoices.map(b=>{
-      const due = payable(b);
-      const received = Math.round((b.payments || []).reduce((sum,p)=>sum+Number(p.amount),0)*100)/100;
-      const excess = Math.max(0,Math.round((received-Number(b.total))*100)/100);
-      const state = !due ? 'Paid' : due === Number(b.total) ? 'Pending payment' : 'Part paid';
-      return '<div class="card-actions"><strong>'+e(b.number)+' · '+e(b.customer_name)+'</strong><span class="badge">'+state+'</span> '+'<span>Total '+money(b.total)+' · Received '+money(received)+' · Remaining '+money(due)+'</span>'+
-        (excess > 0 ? '<span class="excess-payment">Excess '+money(excess)+' · refund or credit required</span>' : '')+
-        '<button class="secondary" data-invoice-print="'+e(b.id)+'">Print / PDF</button>'+
-        (received===0 || received<Number(b.total) ? '<button type="button" class="secondary icon-button" data-invoice-edit="'+e(b.id)+'" aria-label="Edit invoice '+e(b.number)+'" title="Edit invoice"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M16 3l5 5-12 12H4v-5zM14 5l5 5"/></svg></button>' : '')+
-        (due>0?'<button data-invoice-pay="'+e(b.id)+'">Record payment</button>' +
-          (b.service_tickets?.mobile ? '<a href="tel:+91'+e(b.service_tickets.mobile)+'">Call customer</a>' : '') : '')+'</div>';
-    }).join('') : '<p class="muted">No invoices issued yet.</p>')+'</section>';
+function renderBilling(data) {
+  const {completed,invoices}=data;
+  billingState.offset=data.offset;
+  $('content').innerHTML=billingMarkup(data,billingState);
+  const applyFilters=()=>{
+    const form=$('billing-filters');
+    const values=formData(form);
+    Object.assign(billingState,{search:values.search.trim(),status:values.status || billingState.status,from:values.from,to:values.to,offset:0});
+    delete form.dataset.dirty;
+    return load();
+  };
+  $('billing-filters').addEventListener('submit',event=>{event.preventDefault();applyFilters();});
+  $('billing-filters').querySelector('select[name="status"]')?.addEventListener('change',applyFilters);
+  $('billing-refresh').onclick=applyFilters;
+  $('content').querySelectorAll('[data-billing-tab]').forEach(button=>{button.onclick=()=>{billingState.tab=button.dataset.billingTab;billingState.offset=0;load();};});
+  $('billing-page-size').onchange=event=>{billingState.limit=Number(event.target.value);billingState.offset=0;load();};
+  $('billing-prev').onclick=()=>{billingState.offset=Math.max(0,billingState.offset-data.limit);load();};
+  $('billing-next').onclick=()=>{billingState.offset+=data.limit;load();};
+  $('content').querySelectorAll('[data-invoice-view]').forEach(button=>{button.onclick=()=>{
+    const bill=invoices.find(b=>b.id===button.dataset.invoiceView);
+    $('dialog-title').textContent='Invoice '+bill.number;
+    $('dialog-error').textContent='';
+    $('dialog-content').innerHTML='<p><strong>'+e(bill.customer_name)+'</strong><br>'+e(bill.service_address)+'</p><p class="meta">Ticket #'+e(bill.service_tickets.ticket_number)+' · '+e(bill.issued_on)+'</p>'+
+      '<div class="table-wrap"><table><thead><tr><th>Item / service</th><th>Qty</th><th>Unit price</th><th>Amount</th></tr></thead><tbody>'+bill.lines.map(line=>'<tr><td>'+e(line.description)+'</td><td>'+e(line.quantity)+' '+e(line.uom)+'</td><td>'+money(line.unit_price)+'</td><td>'+money(line.amount)+'</td></tr>').join('')+'</tbody></table></div>'+
+      (Number(bill.discount_amount)>0?'<p>Discount ('+Number(bill.discount_percent || 0).toFixed(2)+'%) −'+money(bill.discount_amount)+'</p>':'')+
+      '<p>Total (including tax) <strong>'+money(bill.total)+'</strong></p><p>Received '+money(bill.received)+'</p><p>Remaining <strong>'+money(bill.due)+'</strong></p>'+
+      (Number(bill.excess)>0?'<p class="billing-excess">Excess '+money(bill.excess)+' · refund or credit required</p>':'')+
+      '<h3>Payment history</h3>'+((bill.payments || []).length?bill.payments.map(payment=>'<p>'+money(payment.amount)+' · '+e(payment.method)+' · '+e(date(payment.paid_at))+'</p>').join(''):'<p class="muted">No payments received.</p>')+
+      '<button type="button" id="invoice-detail-print">Print / PDF</button>';
+    $('invoice-detail-print').onclick=()=>printInvoice(bill);
+    $('dialog').showModal();
+  };});
   for (const button of $('content').querySelectorAll('[data-draft]')) button.onclick = async () => {
     button.disabled = true;
     button.textContent = 'Loading invoice…';

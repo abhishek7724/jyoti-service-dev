@@ -2,6 +2,7 @@ import { createHmac } from 'node:crypto';
 import { sendAssignmentAlerts } from '../lib/push.js';
 import { HttpError, clients, read, requireRole, staffSession } from '../lib/db.js';
 import { forms, mobile, staffEmail, ticket, uuid, validatePushEndpoint } from '../lib/validation.js';
+import { billingQuery } from '../lib/billing.js';
 
 import {accessibleTicket, ticketEvidence, createMediaUpload, finalizeMedia} from '../lib/ticket-workflow.js';
 
@@ -300,7 +301,7 @@ async function staffAction(action, req, input) {
       return read(db.rpc('record_receipt',{p_id:data.id,p_line:data.line_id,p_quantity:data.quantity}));
     }
     case 'supplierBill': return read(db.from('supplier_bills').insert(parse(forms.supplierBill,input)).select('id').single());
-    case 'billing': return billing(db);
+    case 'billing': return read(db.rpc('billing_workspace',billingQuery(input)));
     case 'invoiceDraft': {
       const id = parse(uuid,input.id);
       const [booking,parts] = await Promise.all([
@@ -362,14 +363,6 @@ async function purchases(db) {
     catalog(db),
   ]);
   return { orders,...masters };
-}
-
-async function billing(db) {
-  const [completed,invoices] = await Promise.all([
-    read(db.from('service_tickets').select('id,ticket_number,customer_name,created_at,payments!payments_ticket_id_fkey(amount),invoices!left(id)').in('status',['Repair Complete','Paid, not billed']).is('invoices',null).order('created_at',{ascending:false})),
-    read(db.from('invoices').select('*,service_tickets(ticket_number,mobile),payments(amount,method,reference,paid_at)').order('issued_on',{ascending:false}).order('id')),
-  ]);
-  return { completed,invoices };
 }
 
 export default async function handler(req,res) {

@@ -27,6 +27,7 @@ const options=convertV4MiniflareOptions({
       return new Response(null,{status:201});
     }
     if(path.endsWith('/consume_rate_limit'))return Response.json(true);
+    if(path.endsWith('/billing_workspace')){const filters=await request.json();assert.equal(filters.p_status,'part_paid');assert.equal(filters.p_limit,10);assert.equal(filters.p_offset,10);return Response.json({tab:'invoices',offset:10,limit:10,total:12,invoices:[],completed:[]});}
     if(path==='/auth/v1/user')return Response.json({id});
     if(path==='/rest/v1/staff')return Response.json([{user_id:id,name:'Runtime Manager',role:'manager'}]);
     if(path==='/rest/v1/push_subscriptions')return Response.json(request.method==='GET'?[{endpoint:subscription.endpoint,subscription}]:null);
@@ -59,6 +60,7 @@ try{
   const assigned=await post('/api/service',{action:'assign',input:{id,technician_id:id}},{Authorization:'Bearer test-only'});
   const assignment=await assigned.json();assert.equal(assigned.status,200,JSON.stringify(assignment));assert.match(assignment.result.notification,/accepted/);assert.ok(pushSent);
   console.log('PASS staff authentication, assignment, VAPID encryption and HTTPS push transport');
+  const billing=await post('/api/service',{action:'billing',input:{status:'part_paid',limit:10,offset:10}},{Authorization:'Bearer test-only'});const workspace=await billing.json();assert.equal(billing.status,200,JSON.stringify(workspace));assert.equal(workspace.result.total,12);console.log('PASS finance-role billing filters and database pagination transport');
   const body={action:'send',invoice_id:id,timestamp:String(Math.floor(Date.now()/1000))};
   const signature=createHmac('sha256',token).update('send:'+id+':'+body.timestamp).digest('hex');
   const whatsapp=await post('/api/whatsapp-invoice',body,{'x-jyoti-signature':signature});
