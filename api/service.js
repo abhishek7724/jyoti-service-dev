@@ -64,10 +64,13 @@ async function publicAction(action, req, input) {
     await rateLimit(db, req, action, 30);
     if (typeof input.username !== 'string' || !input.username.trim() || input.username.length > 150 ||
         typeof input.pin !== 'string' || !/^[0-9]{4}$/.test(input.pin)) throw new HttpError(422, 'Enter your staff username and four-digit PIN');
-    const email = staffEmail(input.username);
-    await rateLimit(db, req, 'login-account', 5, email);
+    const username=input.username.trim().toLowerCase();
+    await rateLimit(db,req,'login-account',5,username);
+    const identity=await read(db.rpc('staff_login_identity',{p_username:username}));
+    if(!identity?.email || !identity.user_id)throw new HttpError(401,'Incorrect staff username or PIN');
+    const email=identity.email;
     const { data, error } = await userDb.auth.signInWithPassword({ email, password: pinPassword(email,input.pin) });
-    if (error || !data.session) throw new HttpError(401, 'Incorrect staff username or PIN');
+    if (error || !data.session || data.user?.id !== identity.user_id) throw new HttpError(401, 'Incorrect staff username or PIN');
     const staff = await read(db.from('staff').select('user_id').eq('user_id', data.user.id).eq('active', true).maybeSingle());
     if (!staff) throw new HttpError(403, 'This account has no active staff access');
     return sessionView(data.session);

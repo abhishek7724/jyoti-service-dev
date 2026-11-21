@@ -17,6 +17,7 @@ test('login uses protected PIN credential and five-attempt account limit',async(
  let tokenRequested=false;
  globalThis.fetch=async(url,init)=>{const u=new URL(url);
  if(u.pathname.endsWith('/consume_rate_limit')){const b=JSON.parse(init.body);assert.ok([5,30].includes(b.p_limit));return Response.json(true);}
+ if(u.pathname.endsWith('/staff_login_identity'))return Response.json({user_id:'aaaaaaaa-0000-4000-8000-000000000001',email:'tech@staff.jyoti.invalid'});
  if(u.pathname==='/auth/v1/token'){tokenRequested=true;assert.equal(JSON.parse(init.body).password,pinPassword('tech@staff.jyoti.invalid','0123'));return Response.json({access_token:'fixture',refresh_token:'fixture-refresh',expires_in:3600,token_type:'bearer',user:{id:'aaaaaaaa-0000-4000-8000-000000000001'}});}
  return Response.json({user_id:'aaaaaaaa-0000-4000-8000-000000000001'});
  };
@@ -25,7 +26,7 @@ test('login uses protected PIN credential and five-attempt account limit',async(
 test('legacy password and incorrect PIN cannot sign in; exhausted account limit blocks auth',async()=>{
  globalThis.fetch=async()=>Response.json(true);
  assert.equal((await login({username:'tech',password:'old-password'})).code,422);
- globalThis.fetch=async(url)=>new URL(url).pathname.endsWith('/consume_rate_limit')?Response.json(true):Response.json({message:'Invalid login credentials'},{status:400});
+ globalThis.fetch=async(url)=>{const p=new URL(url).pathname;if(p.endsWith('/consume_rate_limit'))return Response.json(true);if(p.endsWith('/staff_login_identity'))return Response.json({user_id:'aaaaaaaa-0000-4000-8000-000000000001',email:'tech@staff.jyoti.invalid'});return Response.json({message:'Invalid login credentials'},{status:400});};
  assert.equal((await login({username:'tech',pin:'9999'})).code,401);
  let auth=false;
  globalThis.fetch=async(url,init)=>{if(new URL(url).pathname.endsWith('/consume_rate_limit'))return Response.json(JSON.parse(init.body).p_limit!==5);auth=true;return Response.json({});};
@@ -45,4 +46,16 @@ test('only managers can reset a PIN and only for a staff identity',async()=>{
  role='billing';assert.equal((await call()).code,403);
  role='manager';exists=false;assert.equal((await call()).code,404);assert.equal(updated,false);
  exists=true;assert.equal((await call()).code,200);assert.equal(updated,true);
+});
+test('renamed username keeps its stable auth email and PIN; old and deleted usernames cannot sign in',async()=>{
+ const id='aaaaaaaa-0000-4000-8000-000000000001';let tokenCalls=0;
+ globalThis.fetch=async(url,init)=>{const p=new URL(url).pathname;
+ if(p.endsWith('/consume_rate_limit'))return Response.json(true);
+ if(p.endsWith('/staff_login_identity'))return Response.json(JSON.parse(init.body).p_username==='abhishek'?{user_id:id,email:'original@example.com'}:null);
+ if(p==='/auth/v1/token'){tokenCalls++;const body=JSON.parse(init.body);assert.equal(body.email,'original@example.com');assert.equal(body.password,pinPassword('original@example.com','0456'));return Response.json({access_token:'fixture',refresh_token:'fixture-refresh',expires_in:3600,token_type:'bearer',user:{id}});}
+ return Response.json({user_id:id});
+ };
+ assert.equal((await login({username:' Abhishek ',pin:'0456'})).code,200);
+ for(const username of ['original@example.com','edwin','sik'])assert.equal((await login({username,pin:'0456'})).code,401);
+ assert.equal(tokenCalls,1);
 });

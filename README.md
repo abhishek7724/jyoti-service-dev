@@ -70,3 +70,5 @@ Staff sign in with their existing username (or the original manager email) and a
 ## Editing new tickets
 
 Managers can use Edit ticket in ticket details only while status is New, assigned_to is empty and assignment_version is still its initial value (1). Name, phone, locality, city, address, appliance, brand, service type and issue can be corrected. Ticket number, creation/source information and public location data stay unchanged. A server-only RPC locks the ticket and checks the current lifecycle plus activity version before saving. A database trigger also blocks intake-field changes after any assignment, including a ticket that was subsequently unassigned. Stale edit forms must reload. Editing publishes the existing ticket activity update for live dashboards.
+
+Login names resolve through the server-only `staff_login_identity` RPC to the original auth identity. Renaming a staff username does not change its auth email, PIN-derived credential, UUID, role or ownership/history. Inactive/deleted staff and former usernames cannot sign in through the portal. The identity lookup cannot be called by anonymous or authenticated clients directly.
