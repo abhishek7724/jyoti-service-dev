@@ -368,6 +368,10 @@ function renderTicketDetail(data) {
     '<h3 class="section-gap">After photos <small class="meta">Optional</small></h3>'+photoGallery(data.media,'completion')+'</section>'+
     '<section class="panel"><div class="section-title"><h2>Payments and billing</h2>'+(canCollect ? btn('Receive payment','receive-payment') : '')+'</div>'+financialSummary(data)+receiptHistory(data.payments,data.media)+'</section>';
   $('content').innerHTML='<section class="panel"><div class="section-title"><h2>'+e(t.appliance)+' · '+e(t.brand)+'</h2>'+statusBadge(t.status)+'</div><p>'+e(t.customer_name)+'</p><p class="preserve-lines">'+e(t.issue)+'</p><div class="actions"><a class="action-link" href="tel:+91'+e(t.mobile)+'">Call '+e(t.mobile)+'</a><a class="action-link" target="_blank" rel="noopener noreferrer" href="'+e(mapsLink(t))+'">Directions</a></div><dl class="ticket-facts">'+detail('Service address',[t.service_address,t.locality,t.city].filter(Boolean).join(', '))+detail('Service type',t.service_type)+detail('Source',t.intake_source)+detail('Created',date(t.created_at))+'</dl>'+requiredPartsSummary(data.requiredParts,t.status)+rejectionMessage(t)+'<div class="actions" id="repair-actions"></div></section>'+sections;
+  if(user.role === 'manager' && t.status === 'New' && !t.assigned_to && t.assignment_version === 1){
+    $('repair-actions').innerHTML=btn('Edit ticket','edit-ticket',true);
+    $('edit-ticket').onclick=()=>editTicket(t);
+  }
   if(canCollect)$('receive-payment').onclick=()=>receivePaymentModal(data);
   if(user.role === 'manager' && t.status === 'Assignment Rejected'){
     $('repair-actions').innerHTML=btn('Reassign technician','reassign-ticket');
@@ -529,6 +533,23 @@ function newTicket() {
       }
     } catch {}
   });
+}
+
+function editTicket(t){
+  const value=(label,name,attrs='')=>input(label,name,attrs+' value="'+e(t[name] || '')+'"');
+  const appliances=[...new Set([...applianceOptions,t.appliance])];
+  const form=modal('Edit ticket #'+t.ticket_number,
+    '<div class="pair">'+value('Customer name','customer_name','required maxlength="100"')+
+    value('Mobile number','mobile','required type="tel" inputmode="numeric" pattern="[6-9][0-9]{9}" maxlength="10"')+
+    value('Service area','locality','required maxlength="100" placeholder="Type locality"')+
+    value('Brand','brand','required maxlength="100" placeholder="Type brand"')+
+    select('Appliance','appliance',appliances,t.appliance)+
+    value('City','city','required maxlength="100"')+
+    select('Service type','service_type',['Bring to Shop','Home Visit','Home Pickup','Installation','Preventive Maintenance','Warranty Service'],t.service_type)+'</div>'+
+    '<label>Service address<textarea name="service_address" required maxlength="500">'+e(t.service_address)+'</textarea></label>'+
+    '<label>Issue<textarea name="issue" required maxlength="2000">'+e(t.issue)+'</textarea></label>',
+    'Save changes',async values=>{await request('editTicket',{id:t.id,version:t.activity_version,...values});return 'Ticket details saved';});
+  attachSuggestions(form,'locality',localityOptions);attachSuggestions(form,'brand',brandOptions);
 }
 
 function newStaff() {

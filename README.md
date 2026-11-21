@@ -66,3 +66,7 @@ Part-paid invoice corrections are covered by `test/sql/part-paid-invoice.sql`, i
 ## Staff PIN authentication
 
 Staff sign in with their existing username (or the original manager email) and a four-digit PIN. The server derives an identity-specific strong auth credential using the private `STAFF_PIN_SECRET`; PINs are never stored in staff records or sent to the browser after creation/reset. Keep this secret stable across deployments and back it up securely. Login accepts five attempts per account and thirty per IP in fifteen minutes. Staff creation requires a PIN; managers can edit name/mobile/role and reset an individual staff PIN from the Staff module. Existing sessions follow the normal Supabase session lifecycle after a reset.
+
+## Editing new tickets
+
+Managers can use Edit ticket in ticket details only while status is New, assigned_to is empty and assignment_version is still its initial value (1). Name, phone, locality, city, address, appliance, brand, service type and issue can be corrected. Ticket number, creation/source information and public location data stay unchanged. A server-only RPC locks the ticket and checks the current lifecycle plus activity version before saving. A database trigger also blocks intake-field changes after any assignment, including a ticket that was subsequently unassigned. Stale edit forms must reload. Editing publishes the existing ticket activity update for live dashboards.

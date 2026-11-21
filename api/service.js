@@ -243,6 +243,13 @@ async function staffAction(action, req, input) {
     return read(db.from('service_tickets').select('customer_name,locality,city,service_address')
       .eq('mobile',phone).order('created_at',{ascending:false}).limit(1).maybeSingle());
   }
+  if(action === 'editTicket'){
+    requireRole(staff,'manager');
+    const id=parse(uuid,input.id);
+    if(!Number.isSafeInteger(input.version) || input.version<0)throw new HttpError(422,'Reload the ticket before editing');
+    const details=parse(ticket,{...input,latitude:null,longitude:null,maps_url:null});
+    return read(db.rpc('edit_new_service_ticket',{p_ticket:id,p_actor:staff.user_id,p_version:input.version,p_details:{customer_name:details.customer_name,mobile:details.mobile,locality:details.locality,city:details.city,service_address:details.service_address,appliance:details.appliance,brand:details.brand,service_type:details.service_type,issue:details.issue}}));
+  }
   if (action === 'createTicket') {
     requireRole(staff, 'manager');
     const key = parse(uuid,input.key);
